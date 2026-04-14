@@ -7,8 +7,8 @@ import {
 } from "../shared/contracts.ts";
 import { isSupportedSourceUrl, normalizeSourceUrl } from "../shared/sources.ts";
 import { sanitizeFilename } from "../shared/strings.ts";
-import { buildDownloadRequestInit, fetchCobaltInfo, resolveSource } from "./cobalt.ts";
 import { readIntEnv, requireEnv } from "./env.ts";
+import { buildUpstreamDownloadRequestInit, fetchUpstreamInfo, resolveSource } from "./upstream.ts";
 import type { Env } from "./env.ts";
 import { errorResponse, jsonResponse, methodNotAllowed } from "./http.ts";
 import { buildContentDisposition, readDownloadToken } from "./token.ts";
@@ -55,7 +55,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
 async function handleHealth(env: Env): Promise<Response> {
   try {
-    const info = await fetchCobaltInfo(env);
+    const info = await fetchUpstreamInfo(env);
     const body: HealthResponseBody = {
       authenticated: info.authenticated,
       ok: true,
@@ -72,7 +72,7 @@ async function handleHealth(env: Env): Promise<Response> {
       message:
         error instanceof Error
           ? error.message
-          : "Unable to connect to the configured Cobalt instance.",
+          : "Unable to connect to the configured extractor upstream.",
       ok: false,
       services: [],
       upstreamUrl: env.COBALT_API_URL,
@@ -146,7 +146,7 @@ async function handleDownload(request: Request, env: Env): Promise<Response> {
     return errorResponse(400, "Refusing to proxy an unsafe upstream URL.");
   }
 
-  const upstream = await fetch(remoteUrl, await buildDownloadRequestInit(env, remoteUrl));
+  const upstream = await fetch(remoteUrl, await buildUpstreamDownloadRequestInit(env, remoteUrl));
 
   if (!upstream.ok || !upstream.body) {
     const excerpt = await upstream.text();

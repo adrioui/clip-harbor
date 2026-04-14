@@ -7,31 +7,31 @@ import type {
   ResolveResult,
   ResolvedItemKind,
 } from "../shared/contracts.ts";
-import { humanizeFilename, sanitizeFilename } from "../shared/strings.ts";
 import { inferPlatform, sourceLabel } from "../shared/sources.ts";
+import { humanizeFilename, sanitizeFilename } from "../shared/strings.ts";
 import type { Env } from "./env.ts";
 import { issueDownloadToken } from "./token.ts";
 
-interface CobaltRedirectResponse {
+interface UpstreamRedirectResponse {
   filename: string;
   status: "redirect" | "tunnel";
   url: string;
 }
 
-interface CobaltPickerItem {
+interface UpstreamPickerItem {
   thumb?: string;
   type: ResolvedItemKind;
   url: string;
 }
 
-interface CobaltPickerResponse {
+interface UpstreamPickerResponse {
   audio?: string;
   audioFilename?: string;
-  picker: CobaltPickerItem[];
+  picker: UpstreamPickerItem[];
   status: "picker";
 }
 
-interface CobaltLocalProcessingResponse {
+interface UpstreamLocalProcessingResponse {
   output: {
     filename: string;
   };
@@ -41,27 +41,27 @@ interface CobaltLocalProcessingResponse {
   type: string;
 }
 
-interface CobaltErrorResponse {
+interface UpstreamErrorResponse {
   error: {
     code: string;
   };
   status: "error";
 }
 
-type CobaltResponse =
-  | CobaltRedirectResponse
-  | CobaltPickerResponse
-  | CobaltLocalProcessingResponse
-  | CobaltErrorResponse;
+type UpstreamResponse =
+  | UpstreamRedirectResponse
+  | UpstreamPickerResponse
+  | UpstreamLocalProcessingResponse
+  | UpstreamErrorResponse;
 
-interface CobaltInfoResponse {
+interface UpstreamInfoResponse {
   cobalt?: {
     services?: string[];
     version?: string;
   };
 }
 
-export async function fetchCobaltInfo(env: Env): Promise<{
+export async function fetchUpstreamInfo(env: Env): Promise<{
   authenticated: boolean;
   services: string[];
   version?: string;
@@ -74,7 +74,7 @@ export async function fetchCobaltInfo(env: Env): Promise<{
     throw new Error(`Upstream info request failed with ${upstreamResponse.status}`);
   }
 
-  const payload = (await upstreamResponse.json()) as CobaltInfoResponse;
+  const payload = (await upstreamResponse.json()) as UpstreamInfoResponse;
   const result: {
     authenticated: boolean;
     services: string[];
@@ -120,7 +120,7 @@ export async function resolveSource(
       signal: controller.signal,
     });
 
-    const payload = (await response.json()) as CobaltResponse;
+    const payload = (await response.json()) as UpstreamResponse;
 
     if (!response.ok) {
       return createErrorResult(sourceUrl, `Upstream rejected the request (${response.status}).`);
@@ -170,7 +170,10 @@ export async function resolveSource(
   }
 }
 
-export async function buildDownloadRequestInit(env: Env, remoteUrl: string): Promise<RequestInit> {
+export async function buildUpstreamDownloadRequestInit(
+  env: Env,
+  remoteUrl: string,
+): Promise<RequestInit> {
   const remote = new URL(remoteUrl);
   const upstreamOrigin = new URL(env.COBALT_API_URL).origin;
 
@@ -206,7 +209,10 @@ function buildUpstreamHeaders(env: Env): HeadersInit {
   return {};
 }
 
-async function signSingleItem(env: Env, payload: CobaltRedirectResponse): Promise<DownloadItem[]> {
+async function signSingleItem(
+  env: Env,
+  payload: UpstreamRedirectResponse,
+): Promise<DownloadItem[]> {
   return [
     {
       downloadPath: await buildDownloadPath(env, payload.filename, payload.url),
@@ -221,7 +227,7 @@ async function signSingleItem(env: Env, payload: CobaltRedirectResponse): Promis
 async function signPickerItems(
   env: Env,
   sourceUrl: string,
-  payload: CobaltPickerResponse,
+  payload: UpstreamPickerResponse,
 ): Promise<DownloadItem[]> {
   const platform = inferPlatform(sourceUrl);
   const items = await Promise.all(
