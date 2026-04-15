@@ -23,10 +23,9 @@ test("health route reports upstream status", async () => {
     if (url === "https://extractor.example/") {
       return new Response(
         JSON.stringify({
-          cobalt: {
-            services: ["instagram", "tiktok"],
-            version: "1.2.3",
-          },
+          ok: true,
+          supportedPlatforms: ["instagram", "tiktok"],
+          version: "1.2.3",
         }),
         { status: 200 },
       );
@@ -53,22 +52,22 @@ test("resolve route returns normalized results", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
-    if (url === "https://extractor.example/" && init?.method === "POST") {
+    if (url === "https://extractor.example/extract" && init?.method === "POST") {
       return new Response(
         JSON.stringify({
           filename: "clip.mp4",
-          status: "tunnel",
-          url: "https://extractor.example/tunnel/clip.mp4",
+          url: "https://extractor.example/download/clip.mp4",
+          type: "video",
         }),
         { status: 200 },
       );
     }
 
-    if (url === "https://extractor.example/tunnel/clip.mp4") {
+    if (url === "https://extractor.example/download/clip.mp4") {
       return new Response("bytes", { status: 200 });
     }
 
-    throw new Error(`unexpected fetch ${url}`);
+    throw new Error(`unexpected fetch ${url} ${init?.method ?? ""}`);
   }) as typeof fetch;
 
   try {
@@ -86,12 +85,56 @@ test("resolve route returns normalized results", async () => {
     assert.equal(resolve.status, 200);
     const body = (await resolve.json()) as {
       results: Array<{
+        caption?: string;
         items: Array<{ downloadPath: string }>;
         status: string;
       }>;
     };
     assert.equal(body.results[0]?.status, "ready");
     assert.ok(body.results[0]?.items[0]?.downloadPath);
+    assert.equal(body.results[0]?.caption, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("resolve route passes caption from extractor", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/extract" && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          caption: "Check out this amazing video! #fun #viral",
+          filename: "tiktok-video-789.mp4",
+          type: "video",
+          url: "https://extractor.example/download/tiktok-video-789.mp4",
+        }),
+        { status: 200 },
+      );
+    }
+
+    throw new Error(`unexpected fetch ${url} ${init?.method ?? ""}`);
+  }) as typeof fetch;
+
+  try {
+    const resolve = await handleRequest(
+      new Request("https://app.example/api/resolve", {
+        body: JSON.stringify({
+          urls: ["https://www.tiktok.com/@user/video/1234567890"],
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+      createEnv(),
+    );
+
+    assert.equal(resolve.status, 200);
+    const body = (await resolve.json()) as {
+      results: Array<{ caption?: string; status: string }>;
+    };
+    assert.equal(body.results[0]?.status, "ready");
+    assert.equal(body.results[0]?.caption, "Check out this amazing video! #fun #viral");
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -1,6 +1,5 @@
 import { mapWithConcurrency } from "../shared/async.ts";
 import {
-  normalizeResolveOptions,
   type HealthResponseBody,
   type ResolveRequestBody,
   type ResolveResponseBody,
@@ -113,9 +112,8 @@ async function handleResolve(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  const options = normalizeResolveOptions(payload.options);
   const results = await mapWithConcurrency(normalizedUrls, concurrency, async (sourceUrl) =>
-    resolveSource(env, sourceUrl, options),
+    resolveSource(env, sourceUrl),
   );
 
   const body: ResolveResponseBody = {

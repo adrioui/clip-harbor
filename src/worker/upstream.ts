@@ -1,67 +1,33 @@
 // Client for the configured yt-dlp extraction upstream.
 // In normal deployments that upstream is Cobalt itself.
 // In free local mode, `scripts/local-origin-server.ts` provides a small bridge backed by yt-dlp.
-import type {
-  DownloadItem,
-  ResolveOptions,
-  ResolveResult,
-  ResolvedItemKind,
-} from "../shared/contracts.ts";
+import type { DownloadItem, ResolveResult, ResolvedItemKind } from "../shared/contracts.ts";
 import { inferPlatform, sourceLabel } from "../shared/sources.ts";
 import { humanizeFilename, sanitizeFilename } from "../shared/strings.ts";
 import type { Env } from "./env.ts";
 import { issueDownloadToken } from "./token.ts";
 
-interface UpstreamRedirectResponse {
+// ── New clean API types ──
+
+interface ExtractorHealthResponse {
+  ok: boolean;
+  version?: string;
+  supportedPlatforms?: string[];
+}
+
+interface ExtractorResolveResponse {
+  url: string;
   filename: string;
-  status: "redirect" | "tunnel";
-  url: string;
-  description?: string;
+  caption?: string;
+  thumbnailUrl?: string;
+  type?: string;
 }
 
-interface UpstreamPickerItem {
-  thumb?: string;
-  type: ResolvedItemKind;
-  url: string;
+interface ExtractorErrorResponse {
+  error: string;
 }
 
-interface UpstreamPickerResponse {
-  audio?: string;
-  audioFilename?: string;
-  picker: UpstreamPickerItem[];
-  status: "picker";
-  description?: string;
-}
-
-interface UpstreamLocalProcessingResponse {
-  output: {
-    filename: string;
-  };
-  service: string;
-  status: "local-processing";
-  tunnel: string[];
-  type: string;
-}
-
-interface UpstreamErrorResponse {
-  error: {
-    code: string;
-  };
-  status: "error";
-}
-
-type UpstreamResponse =
-  | UpstreamRedirectResponse
-  | UpstreamPickerResponse
-  | UpstreamLocalProcessingResponse
-  | UpstreamErrorResponse;
-
-interface UpstreamInfoResponse {
-  cobalt?: {
-    services?: string[];
-    version?: string;
-  };
-}
+// ── Upstream info ──
 
 export async function fetchUpstreamInfo(env: Env): Promise<{
   authenticated: boolean;
@@ -76,43 +42,32 @@ export async function fetchUpstreamInfo(env: Env): Promise<{
     throw new Error(`Upstream info request failed with ${upstreamResponse.status}`);
   }
 
-  const payload = (await upstreamResponse.json()) as UpstreamInfoResponse;
+  const payload = (await upstreamResponse.json()) as ExtractorHealthResponse;
   const result: {
     authenticated: boolean;
     services: string[];
     version?: string;
   } = {
     authenticated: hasUpstreamAuth(env),
-    services: payload.cobalt?.services ?? [],
+    services: payload.supportedPlatforms ?? [],
   };
-  if (payload.cobalt?.version) {
-    result.version = payload.cobalt.version;
+  if (payload.version) {
+    result.version = payload.version;
   }
 
   return result;
 }
 
-export async function resolveSource(
-  env: Env,
-  sourceUrl: string,
-  options: ResolveOptions,
-): Promise<ResolveResult> {
+// ── Source resolution ──
+
+export async function resolveSource(env: Env, sourceUrl: string): Promise<ResolveResult> {
   const timeoutMs = Number(env.EXTRACTOR_TIMEOUT_MS ?? "20000");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(new URL("/", env.EXTRACTOR_URL), {
-      body: JSON.stringify({
-        allowH265: options.allowH265,
-        alwaysProxy: true,
-        downloadMode: options.downloadMode,
-        filenameStyle: options.filenameStyle,
-        localProcessing: "disabled",
-        tiktokFullAudio: options.tiktokFullAudio,
-        url: sourceUrl,
-        videoQuality: options.videoQuality,
-      }),
+    const response = await fetch(new URL("/extract", env.EXTRACTOR_URL), {
+      body: JSON.stringify({ url: sourceUrl }),
       headers: {
         ...buildUpstreamHeaders(env),
         Accept: "application/json",
@@ -122,43 +77,36 @@ export async function resolveSource(
       signal: controller.signal,
     });
 
-    const payload = (await response.json()) as UpstreamResponse;
-
     if (!response.ok) {
-      return createErrorResult(sourceUrl, `Upstream rejected the request (${response.status}).`);
+      let errorMessage: string;
+      try {
+        const errorPayload = (await response.json()) as ExtractorErrorResponse;
+        errorMessage = errorPayload.error ?? `Upstream rejected the request (${response.status}).`;
+      } catch {
+        errorMessage = `Upstream rejected the request (${response.status}).`;
+      }
+      return createErrorResult(sourceUrl, errorMessage);
     }
 
-    if (payload.status === "error") {
-      return createErrorResult(
-        sourceUrl,
-        `Upstream could not resolve this URL (${payload.error.code}).`,
-      );
-    }
+    const payload = (await response.json()) as ExtractorResolveResponse;
 
-    if (payload.status === "local-processing") {
-      return createErrorResult(
-        sourceUrl,
-        "The upstream extractor requested local post-processing, which this Cloudflare deployment intentionally does not perform.",
-      );
-    }
+    const kind = mapTypeToKind(payload.type);
+    const filename = sanitizeFilename(payload.filename);
+    const title = filename ? humanizeFilename(filename) : sourceLabel(inferPlatform(sourceUrl));
 
-    const items =
-      payload.status === "picker"
-        ? await signPickerItems(env, sourceUrl, payload)
-        : await signSingleItem(env, payload);
-
-    const title = items[0]?.filename
-      ? humanizeFilename(items[0].filename)
-      : sourceLabel(inferPlatform(sourceUrl));
-
-    const caption =
-      payload.status === "redirect" || payload.status === "tunnel" || payload.status === "picker"
-        ? (payload as UpstreamRedirectResponse | UpstreamPickerResponse).description?.trim() ||
-          undefined
-        : undefined;
+    const items: DownloadItem[] = [
+      {
+        downloadPath: await buildDownloadPath(env, filename, payload.url),
+        filename,
+        id: crypto.randomUUID(),
+        kind,
+        label: kind === "video" ? "Video file" : `${capitalize(kind)} file`,
+        ...(payload.thumbnailUrl ? { previewUrl: payload.thumbnailUrl } : {}),
+      },
+    ];
 
     return {
-      ...(caption ? { caption } : {}),
+      ...(payload.caption?.trim() ? { caption: payload.caption.trim() } : {}),
       items,
       platform: inferPlatform(sourceUrl),
       sourceUrl,
@@ -178,6 +126,8 @@ export async function resolveSource(
     clearTimeout(timer);
   }
 }
+
+// ── Download helpers ──
 
 export async function buildUpstreamDownloadRequestInit(
   env: Env,
@@ -202,6 +152,8 @@ export function hasUpstreamAuth(env: Env): boolean {
   return Boolean(env.EXTRACTOR_API_KEY || env.EXTRACTOR_BEARER_TOKEN);
 }
 
+// ── Internals ──
+
 function buildUpstreamHeaders(env: Env): HeadersInit {
   if (env.EXTRACTOR_API_KEY) {
     return {
@@ -218,64 +170,18 @@ function buildUpstreamHeaders(env: Env): HeadersInit {
   return {};
 }
 
-async function signSingleItem(
-  env: Env,
-  payload: UpstreamRedirectResponse,
-): Promise<DownloadItem[]> {
-  return [
-    {
-      downloadPath: await buildDownloadPath(env, payload.filename, payload.url),
-      filename: sanitizeFilename(payload.filename),
-      id: crypto.randomUUID(),
-      kind: "video",
-      label: payload.status === "redirect" ? "Video file" : "Tunneled video",
-    },
-  ];
-}
-
-async function signPickerItems(
-  env: Env,
-  sourceUrl: string,
-  payload: UpstreamPickerResponse,
-): Promise<DownloadItem[]> {
-  const platform = inferPlatform(sourceUrl);
-  const items = await Promise.all(
-    payload.picker.map(async (item, index) => {
-      const result: DownloadItem = {
-        downloadPath: await buildDownloadPath(
-          env,
-          buildPickerFilename(platform, item.type, index + 1),
-          item.url,
-        ),
-        filename: buildPickerFilename(platform, item.type, index + 1),
-        id: crypto.randomUUID(),
-        kind: item.type,
-        label: `${capitalize(item.type)} ${index + 1}`,
-      };
-
-      if (item.thumb) {
-        result.previewUrl = item.thumb;
-      }
-
-      return result;
-    }),
-  );
-
-  if (payload.audio) {
-    items.push({
-      downloadPath: await buildDownloadPath(
-        env,
-        sanitizeFilename(payload.audioFilename ?? `${platform}-audio.mp3`),
-        payload.audio,
-      ),
-      filename: sanitizeFilename(payload.audioFilename ?? `${platform}-audio.mp3`),
-      id: crypto.randomUUID(),
-      kind: "audio",
-      label: "Original audio",
-    });
+function mapTypeToKind(type: string | undefined): ResolvedItemKind {
+  switch (type) {
+    case "audio":
+      return "audio";
+    case "photo":
+      return "photo";
+    case "gif":
+      return "gif";
+    case "video":
+    default:
+      return "video";
   }
-
-  return items;
 }
 
 async function buildDownloadPath(env: Env, filename: string, remoteUrl: string): Promise<string> {
@@ -285,23 +191,6 @@ async function buildDownloadPath(env: Env, filename: string, remoteUrl: string):
     remoteUrl,
   });
   return `/api/download?token=${encodeURIComponent(token)}`;
-}
-
-function buildPickerFilename(
-  platform: ResolveResult["platform"],
-  type: ResolvedItemKind,
-  position: number,
-): string {
-  const extensionByType: Record<ResolvedItemKind, string> = {
-    audio: "mp3",
-    gif: "gif",
-    photo: "jpg",
-    video: "mp4",
-  };
-
-  return sanitizeFilename(
-    `${platform === "unknown" ? "media" : platform}-${type}-${String(position).padStart(2, "0")}.${extensionByType[type]}`,
-  );
 }
 
 function createErrorResult(sourceUrl: string, message: string): ResolveResult {

@@ -4,8 +4,8 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { promisify } from "node:util";
 
-// This local bridge exposes the small subset of the Cobalt HTTP API that the Worker needs.
-// The Worker still talks to an HTTP extractor; only this local process shells out to yt-dlp.
+// This local bridge exposes a clean yt-dlp-native API for the Worker to consume.
+// The Worker sends extraction requests here; this process shells out to yt-dlp.
 
 const execFileAsync = promisify(execFile);
 
@@ -15,94 +15,83 @@ const apiKey = requiredEnv("LOCAL_ORIGIN_API_KEY");
 const services = ["instagram", "tiktok"] as const;
 const cache = new Map<string, CachedDownload>();
 const ttlMs = 1000 * 60 * 20;
-const startedAt = Date.now();
 
 const server = createServer(async (request, response) => {
   try {
     if (!request.url) {
-      writeJson(response, 400, {
-        error: { code: "error.request.url.missing" },
-        status: "error",
-      });
+      writeJson(response, 400, { error: "Request URL missing." });
       return;
     }
 
     const url = new URL(request.url, `http://127.0.0.1:${port}`);
 
+    // GET / — health/info
     if (request.method === "GET" && url.pathname === "/") {
       writeJson(response, 200, {
-        // Keep the Cobalt-shaped payload so the Worker can treat this bridge like any other upstream.
-        cobalt: {
-          services,
-          startTime: String(startedAt),
-          url: publicUrl,
-          version: await ytDlpVersion(),
-        },
-        git: {
-          branch: "local-ytdlp",
-          commit: "yt-dlp",
-          remote: "local-machine",
-        },
+        ok: true,
+        supportedPlatforms: [...services],
+        version: await ytDlpVersion(),
       });
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/") {
+    // POST /extract — resolve a URL
+    if (request.method === "POST" && url.pathname === "/extract") {
       if (!isAuthorized(request.headers.authorization)) {
-        writeJson(response, 400, {
-          error: { code: "error.api.auth.key.missing" },
-          status: "error",
-        });
+        writeJson(response, 401, { error: "Unauthorized" });
         return;
       }
 
-      const body = JSON.parse(await readBody(request)) as { url?: string };
+      let body: { url?: string };
+      try {
+        body = JSON.parse(await readBody(request)) as { url?: string };
+      } catch {
+        writeJson(response, 400, { error: "Request body must be valid JSON." });
+        return;
+      }
+
       if (typeof body.url !== "string" || !body.url.trim()) {
-        writeJson(response, 400, {
-          error: { code: "error.api.url.invalid" },
-          status: "error",
-        });
+        writeJson(response, 400, { error: "Provide a valid URL." });
         return;
       }
 
-      const resolved = await resolveSource(body.url);
-      const id = randomUUID();
-      cache.set(id, resolved);
+      try {
+        const resolved = await resolveSource(body.url);
+        const id = randomUUID();
+        cache.set(id, resolved);
 
-      writeJson(response, 200, {
-        caption: resolved.description || undefined,
-        filename: resolved.filename,
-        status: "tunnel",
-        url: `${publicUrl.replace(/\/+$/u, "")}/download?id=${encodeURIComponent(id)}`,
-      });
+        writeJson(response, 200, {
+          ...(resolved.caption ? { caption: resolved.caption } : {}),
+          ...(resolved.thumbnailUrl ? { thumbnailUrl: resolved.thumbnailUrl } : {}),
+          ...(resolved.type ? { type: resolved.type } : {}),
+          filename: resolved.filename,
+          url: `${publicUrl.replace(/\/+$/u, "")}/download?id=${encodeURIComponent(id)}`,
+        });
+      } catch (error) {
+        writeJson(response, 422, {
+          error: error instanceof Error ? error.message : "Unsupported URL or extraction failed",
+        });
+      }
       return;
     }
 
+    // GET /download?id=xxx — stream cached media
     if (request.method === "GET" && url.pathname === "/download") {
       if (!isAuthorized(request.headers.authorization)) {
-        writeJson(response, 401, {
-          error: { code: "error.api.auth.key.missing" },
-          status: "error",
-        });
+        writeJson(response, 401, { error: "Unauthorized" });
         return;
       }
 
       const id = url.searchParams.get("id");
       if (!id) {
-        writeJson(response, 400, {
-          error: { code: "error.download.id.missing" },
-          status: "error",
-        });
+        writeJson(response, 400, { error: "Missing download id." });
         return;
       }
 
       const cached = cache.get(id);
       if (!cached || cached.expiresAt < Date.now()) {
         cache.delete(id);
-        writeJson(response, 410, {
-          error: { code: "error.download.id.expired" },
-          status: "error",
-        });
+        writeJson(response, 410, { error: "Download id expired." });
         return;
       }
 
@@ -110,17 +99,10 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    writeJson(response, 404, {
-      error: { code: "error.route.not_found" },
-      status: "error",
-    });
+    writeJson(response, 404, { error: "Not found." });
   } catch (error) {
     writeJson(response, 500, {
-      error: {
-        code: "error.local.unhandled",
-        message: error instanceof Error ? error.message : "Unknown failure",
-      },
-      status: "error",
+      error: error instanceof Error ? error.message : "Unknown failure",
     });
   }
 });
@@ -142,21 +124,35 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 interface CachedDownload {
-  description?: string;
+  caption?: string;
   expiresAt: number;
   filename: string;
   sourceUrl: string;
+  thumbnailUrl?: string;
+  type?: string;
 }
 
 interface YtDlpRequestedDownload {
+  ext?: string;
   filename?: string;
   url: string;
 }
 
 interface YtDlpResult {
   description?: string;
+  ext?: string;
   id?: string;
   requested_downloads?: YtDlpRequestedDownload[];
+  thumbnail?: string;
+}
+
+function inferMediaType(ext: string | undefined): string | undefined {
+  if (!ext) return undefined;
+  const lower = ext.toLowerCase();
+  if (["mp4", "webm", "mkv", "avi", "mov", "flv"].includes(lower)) return "video";
+  if (["mp3", "m4a", "ogg", "wav", "flac", "aac", "opus"].includes(lower)) return "audio";
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(lower)) return "photo";
+  return undefined;
 }
 
 async function resolveSource(sourceUrl: string): Promise<CachedDownload> {
@@ -169,15 +165,23 @@ async function resolveSource(sourceUrl: string): Promise<CachedDownload> {
   const parsed = JSON.parse(stdout) as YtDlpResult;
   const requested = parsed.requested_downloads?.[0];
   if (!requested?.url) {
-    throw new Error("yt-dlp did not return a downloadable media URL");
+    throw new Error("Unsupported URL or extraction failed");
   }
 
-  return {
+  const type = inferMediaType(requested.ext) ?? inferMediaType(parsed.ext) ?? "video";
+
+  const result: CachedDownload = {
     expiresAt: Date.now() + ttlMs,
-    filename: requested.filename ?? `${parsed.id ?? "download"}.mp4`,
+    filename: requested.filename ?? `${parsed.id ?? "download"}.${requested.ext ?? "mp4"}`,
     sourceUrl,
-    ...(parsed.description?.trim() ? { description: parsed.description.trim() } : {}),
+    type,
   };
+
+  const caption = parsed.description?.trim();
+  if (caption) result.caption = caption;
+  if (parsed.thumbnail) result.thumbnailUrl = parsed.thumbnail;
+
+  return result;
 }
 
 async function ytDlpVersion(): Promise<string> {
@@ -247,11 +251,7 @@ async function streamDownload(response: ServerResponse, cached: CachedDownload):
     child.on("close", (code) => {
       if (!started && code !== 0) {
         writeJson(response, 502, {
-          error: {
-            code: "error.local.fetch.failed",
-            message: Buffer.concat(stderrChunks).toString("utf8").slice(0, 400),
-          },
-          status: "error",
+          error: Buffer.concat(stderrChunks).toString("utf8").slice(0, 400),
         });
         resolve();
         return;
