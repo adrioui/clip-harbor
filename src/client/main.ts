@@ -1,3 +1,10 @@
+import { html, render } from "lit-html";
+import { classMap } from "lit-html/directives/class-map.js";
+import { live } from "lit-html/directives/live.js";
+import { map } from "lit-html/directives/map.js";
+import { ref, createRef } from "lit-html/directives/ref.js";
+import { unsafeSVG } from "lit-html/directives/unsafe-svg.js";
+
 import {
   DEFAULT_RESOLVE_OPTIONS,
   VIDEO_QUALITIES,
@@ -11,8 +18,7 @@ import { parseUrlList } from "../shared/sources.ts";
 import catSvg from "./cat-mascot.svg?raw";
 import "./styles.css";
 
-const storageKey = "unduh-unduh.draft";
-const downloadConcurrency = 3;
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 type DownloadPhase = "idle" | "queued" | "downloading" | "done" | "error";
 type MascotState = "idle" | "loading" | "success" | "error" | "waiting";
@@ -22,6 +28,22 @@ interface DownloadState {
   phase: DownloadPhase;
 }
 
+interface AppState {
+  downloadStates: Map<string, DownloadState>;
+  health: HealthResponseBody | null;
+  isBusy: boolean;
+  isInputFocused: boolean;
+  mascotState: MascotState;
+  options: ResolveOptions;
+  results: ResolveResult[];
+  urls: string;
+}
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const storageKey = "unduh-unduh.draft";
+const downloadConcurrency = 3;
+
 const mascotMessages: Record<MascotState, string> = {
   idle: "Ready to download",
   loading: "Finding your video...",
@@ -30,724 +52,40 @@ const mascotMessages: Record<MascotState, string> = {
   waiting: "Paste a link to get started",
 };
 
-class MascotController {
-  private element: HTMLElement;
-  private currentState: MascotState = "idle";
+// ─── State ──────────────────────────────────────────────────────────────────
 
-  constructor(selector: string) {
-    this.element = document.querySelector(selector)!;
-    this.setState("waiting");
-  }
+const state: AppState = {
+  downloadStates: new Map(),
+  health: null,
+  isBusy: false,
+  isInputFocused: false,
+  mascotState: "waiting",
+  options: { ...DEFAULT_RESOLVE_OPTIONS },
+  results: [],
+  urls: "",
+};
 
-  setState(state: MascotState): void {
-    this.currentState = state;
-    this.element.dataset.state = state;
-
-    // Toggle SVG groups
-    const groups = this.element.querySelectorAll('g[id^="state-"]');
-    groups.forEach((g) => {
-      (g as SVGGElement).style.display = g.id === `state-${state}` ? "block" : "none";
-    });
-
-    // Update aria-label
-    this.element.setAttribute("aria-label", mascotMessages[state]);
-
-    // Update message text
-    const msgEl = document.querySelector<HTMLElement>(".mascot-message");
-    if (msgEl) {
-      msgEl.textContent = mascotMessages[state];
-    }
-  }
-
-  getState(): MascotState {
-    return this.currentState;
-  }
+function setState(updates: Partial<AppState>): void {
+  Object.assign(state, updates);
+  renderApp();
 }
 
-const app = document.querySelector<HTMLDivElement>("#app");
+// ─── Refs ───────────────────────────────────────────────────────────────────
 
-if (!app) {
-  throw new Error("Missing app root.");
-}
+const urlInputRef = createRef<HTMLTextAreaElement>();
 
-app.innerHTML = `
-  <main class="stage">
-    <!-- Utility nav -->
-    <nav class="utility-nav">
-      <a href="#how-it-works">How it works</a>
-      <a href="#settings">Settings</a>
-      <a href="#about">About</a>
-    </nav>
+// ─── Utility helpers ────────────────────────────────────────────────────────
 
-    <!-- Cat mascot -->
-    <div class="mascot-wrap">
-      <div class="cat-mascot" id="cat-mascot" data-state="waiting" aria-hidden="true">
-        ${catSvg}
-      </div>
-    </div>
-    <div class="mascot-message" aria-live="polite">${mascotMessages.waiting}</div>
-
-    <!-- Input stage -->
-    <div class="input-stage">
-      <form id="resolve-form">
-        <div class="omnibox" id="omnibox">
-          <div class="omnibox-top">
-            <span class="omnibox-icon" aria-hidden="true">🔗</span>
-            <textarea
-              id="url-input"
-              placeholder="Paste links here..."
-              autocomplete="off"
-              aria-label="Video URLs"
-              rows="2"
-            ></textarea>
-            <button class="omnibox-clear" id="clear-input" type="button" aria-label="Clear">×</button>
-          </div>
-          <div class="omnibox-bottom">
-            <span class="link-count" id="link-count" hidden></span>
-            <button class="omnibox-submit" id="resolve-button" type="submit">Download</button>
-          </div>
-        </div>
-
-        <!-- Hidden form controls to preserve options serialization -->
-        <select id="video-quality" name="videoQuality" class="hidden"></select>
-        <input id="allow-h265" name="allowH265" type="checkbox" class="hidden" />
-        <input id="tiktok-full-audio" name="tiktokFullAudio" type="checkbox" class="hidden" />
-
-      </form>
-    </div>
-
-    <!-- Switcher chips -->
-    <div class="switcher" role="group" aria-label="Download options">
-      <button class="switcher-chip" data-option="quality" value="best" type="button">
-        Best quality
-      </button>
-      <button class="switcher-chip" data-option="audio" value="original" type="button">
-        Original audio
-      </button>
-      <button class="switcher-chip" data-option="speed" value="fast" type="button">
-        Fast mode
-      </button>
-    </div>
-
-    <!-- Quick actions -->
-    <div class="quick-actions">
-      <button class="paste-button" id="paste-button" type="button">
-        Paste from clipboard
-      </button>
-
-    </div>
-
-    <!-- Inline results -->
-    <div class="results-area" id="results-area">
-      <div class="results-head">
-        <div class="results-summary" id="results-summary"></div>
-        <button class="ghost results-download-all" id="download-all" type="button" hidden>
-          Download all
-        </button>
-      </div>
-      <div class="results-list" id="results"></div>
-    </div>
-  </main>
-
-  <footer class="stage-footer">
-    <p>Paste links from Instagram or TikTok. No accounts needed.</p>
-  </footer>
-`;
-
-// Initialize mascot
-const mascot = new MascotController("#cat-mascot");
-
-// Get elements
-const form = getRequiredElement<HTMLFormElement>("#resolve-form");
-const urlInput = getRequiredElement<HTMLTextAreaElement>("#url-input");
-const clearInputButton = getRequiredElement<HTMLButtonElement>("#clear-input");
-const resolveButton = getRequiredElement<HTMLButtonElement>("#resolve-button");
-const pasteButton = getRequiredElement<HTMLButtonElement>("#paste-button");
-const downloadAllButton = getRequiredElement<HTMLButtonElement>("#download-all");
-// healthDot removed — status rendered in footer instead
-const resultsRoot = getRequiredElement<HTMLDivElement>("#results");
-const summaryRoot = getRequiredElement<HTMLDivElement>("#results-summary");
-const videoQuality = getRequiredElement<HTMLSelectElement>("#video-quality");
-const allowH265 = getRequiredElement<HTMLInputElement>("#allow-h265");
-const tiktokFullAudio = getRequiredElement<HTMLInputElement>("#tiktok-full-audio");
-const switcherChips = document.querySelectorAll<HTMLButtonElement>(".switcher-chip");
-
-let currentResults: ResolveResult[] = [];
-const downloadStates = new Map<string, DownloadState>();
-
-hydrateSelect(videoQuality, VIDEO_QUALITIES);
-restoreDraft();
-refreshHealth();
-renderResults([]);
-
-// ---- Switcher chip logic ----
-for (const chip of switcherChips) {
-  chip.addEventListener("click", () => {
-    // Deactivate all chips
-    for (const c of switcherChips) {
-      c.classList.remove("active");
-    }
-    chip.classList.add("active");
-
-    const option = chip.dataset.option;
-
-    // Map chip selections to form options
-    if (option === "quality") {
-      // Best quality: max resolution, allow H265
-      videoQuality.value = "max";
-      allowH265.checked = true;
-      tiktokFullAudio.checked = false;
-    } else if (option === "audio") {
-      // Original audio: full audio, default quality
-      videoQuality.value = DEFAULT_RESOLVE_OPTIONS.videoQuality;
-      allowH265.checked = false;
-      tiktokFullAudio.checked = true;
-    } else if (option === "speed") {
-      // Fast mode: lower quality, no H265
-      videoQuality.value = "720";
-      allowH265.checked = false;
-      tiktokFullAudio.checked = false;
-    }
-
-    persistDraft();
-  });
-}
-
-const omniboxEl = getRequiredElement<HTMLDivElement>("#omnibox");
-const linkCountEl = getRequiredElement<HTMLSpanElement>("#link-count");
-
-// ---- Omnibox expand/collapse logic ----
 function countLinks(text: string): number {
   return parseUrlList(text).length;
 }
 
-function updateOmniboxState(): void {
-  const hasContent = urlInput.value.trim().length > 0;
-  const linkCount = countLinks(urlInput.value);
-
-  // Expand when focused or when there are multiple links
-  if (hasContent || linkCount > 1) {
-    omniboxEl.classList.add("expanded");
-  } else {
-    omniboxEl.classList.remove("expanded");
-  }
-
-  // Show/hide clear button
-  if (hasContent) {
-    clearInputButton.classList.add("visible");
-  } else {
-    clearInputButton.classList.remove("visible");
-  }
-
-  // Show link count badge
-  if (linkCount > 1) {
-    linkCountEl.hidden = false;
-    linkCountEl.textContent = `${linkCount} links`;
-  } else {
-    linkCountEl.hidden = true;
-    linkCountEl.textContent = "";
-  }
-
-  // Auto-grow textarea to fit content
-  autoGrowTextarea();
-}
-
-function autoGrowTextarea(): void {
-  // Reset height to recalculate
-  urlInput.style.height = "auto";
-  const lineHeight = parseInt(getComputedStyle(urlInput).lineHeight, 10) || 22;
-  const maxRows = 8;
-  const maxHeight = lineHeight * maxRows;
-  const scrollHeight = urlInput.scrollHeight;
-  urlInput.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
-  urlInput.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
-}
-
-urlInput.addEventListener("focus", () => {
-  omniboxEl.classList.add("focused");
-  updateOmniboxState();
-});
-
-urlInput.addEventListener("blur", () => {
-  omniboxEl.classList.remove("focused");
-  updateOmniboxState();
-});
-
-urlInput.addEventListener("input", updateOmniboxState);
-
-// Auto-expand on paste with multiple URLs
-urlInput.addEventListener("paste", () => {
-  // Use setTimeout so the pasted content is in the textarea
-  setTimeout(updateOmniboxState, 0);
-});
-
-updateOmniboxState();
-
-clearInputButton.addEventListener("click", () => {
-  urlInput.value = "";
-  updateOmniboxState();
-  urlInput.focus();
-  currentResults = [];
-  downloadStates.clear();
-  renderResults([]);
-  mascot.setState("waiting");
-  persistDraft();
-});
-
-// ---- Paste button ----
-pasteButton.addEventListener("click", async () => {
-  try {
-    const text = await navigator.clipboard.readText();
-    if (text) {
-      urlInput.value = text;
-      updateOmniboxState();
-      persistDraft();
-      urlInput.focus();
-    }
-  } catch {
-    // Clipboard access denied — fallback: focus the input so user can Ctrl+V
-    urlInput.focus();
-  }
-});
-
-// ---- Event listeners ----
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await resolveBatch();
-});
-
-downloadAllButton.addEventListener("click", async () => {
-  await queueDownloads(currentResults.flatMap((result) => result.items));
-});
-
-for (const field of [urlInput, videoQuality, allowH265, tiktokFullAudio]) {
-  field.addEventListener("change", persistDraft);
-  field.addEventListener("input", persistDraft);
-}
-
-// ---- Core logic ----
-
-async function resolveBatch(): Promise<void> {
-  const urls = parseUrlList(urlInput.value);
-  if (!urls.length) {
-    summaryRoot.textContent = "Paste at least one link to get started.";
-    resultsRoot.replaceChildren();
-    mascot.setState("waiting");
-    return;
-  }
-
-  setBusy(true);
-  mascot.setState("loading");
-  summaryRoot.textContent = "Loading...";
-
-  try {
-    const payload = {
-      options: readOptions(),
-      urls,
-    };
-
-    const response = await fetch("/api/resolve", {
-      body: JSON.stringify(payload),
-      headers: {
-        "content-type": "application/json",
-      },
-      method: "POST",
-    });
-
-    const data = (await response.json()) as ResolveResponseBody | { error?: string };
-    if (!response.ok || !("results" in data)) {
-      throw new Error(
-        "error" in data && typeof data.error === "string"
-          ? data.error
-          : "Something went wrong. Please try again.",
-      );
-    }
-
-    downloadStates.clear();
-    currentResults = data.results;
-    renderResults(currentResults);
-    mascot.setState("success");
-  } catch (error) {
-    downloadStates.clear();
-    currentResults = [];
-    resultsRoot.replaceChildren();
-    summaryRoot.textContent =
-      error instanceof Error ? error.message : "Something went wrong. Please try again.";
-    mascot.setState("error");
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function refreshHealth(): Promise<void> {
-  try {
-    const response = await fetch("/api/health");
-    const health = (await response.json()) as HealthResponseBody;
-    renderHealth(health);
-  } catch (error) {
-    renderHealth({
-      authenticated: false,
-      message: error instanceof Error ? error.message : "Unknown connectivity failure.",
-      ok: false,
-      services: [],
-      upstreamUrl: "Unavailable",
-    });
-  }
-}
-
-function renderHealth(health: HealthResponseBody): void {
-  // Update footer subtitle with server status instead of masthead dot
-  const footer = document.querySelector<HTMLElement>(".stage-footer p");
-  if (footer) {
-    const baseText = "Paste links from Instagram or TikTok. No accounts needed.";
-    if (!health.ok) {
-      footer.textContent = `${baseText} (Server unreachable)`;
-      footer.style.color = "var(--danger)";
-    } else {
-      footer.textContent = baseText;
-      footer.style.color = "";
-    }
-  }
-}
-
-function renderResults(results: ResolveResult[]): void {
-  resultsRoot.replaceChildren();
-  updateBulkDownloadButton(results);
-
-  if (!results.length) {
-    summaryRoot.textContent = "";
-
-    if (!urlInput.value.trim()) {
-      summaryRoot.textContent = "";
-    }
-    return;
-  }
-
-  const items = results.flatMap((result) => result.items).length;
-  const completed = results
-    .flatMap((result) => result.items)
-    .filter((item) => getDownloadState(item.id).phase === "done").length;
-  const failed = results
-    .flatMap((result) => result.items)
-    .filter((item) => getDownloadState(item.id).phase === "error").length;
-  const progressSuffix = [
-    completed ? `${completed} saved` : null,
-    failed ? `${failed} failed` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  summaryRoot.textContent = `${items} ${items === 1 ? "video" : "videos"} found${progressSuffix ? ` — ${progressSuffix}` : ""}`;
-
-  for (const result of results) {
-    resultsRoot.append(createResultGroup(result));
-  }
-}
-
-function createResultGroup(result: ResolveResult): HTMLElement {
-  const group = document.createElement("div");
-  group.className = "result-group";
-  group.dataset.state = result.status;
-
-  const heading = document.createElement("div");
-  heading.className = "result-group-title";
-  heading.textContent = result.title;
-
-  if (result.caption) {
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "ghost copy-caption-btn";
-    copyBtn.type = "button";
-    copyBtn.textContent = "Copy caption";
-    copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(result.caption!);
-        copyBtn.textContent = "Copied!";
-        copyBtn.classList.add("copied");
-        setTimeout(() => {
-          copyBtn.textContent = "Copy caption";
-          copyBtn.classList.remove("copied");
-        }, 1500);
-      } catch {
-        copyBtn.textContent = "Failed";
-        setTimeout(() => {
-          copyBtn.textContent = "Copy caption";
-        }, 1500);
-      }
-    });
-    const headerRow = document.createElement("div");
-    headerRow.className = "result-group-header";
-    headerRow.append(heading, copyBtn);
-    group.append(headerRow);
-  } else {
-    group.append(heading);
-  }
-
-  if (result.message) {
-    const message = document.createElement("p");
-    message.className = "result-group-message";
-    message.textContent = result.message;
-    group.append(message);
-  }
-
-  if (!result.items.length) {
-    return group;
-  }
-
-  // Add a "Download all" row for multiple items
-  if (result.items.length > 1) {
-    const bulkRow = document.createElement("div");
-    bulkRow.className = "download-row";
-
-    const bulkBtn = document.createElement("button");
-    bulkBtn.className = "ghost";
-    bulkBtn.type = "button";
-    bulkBtn.textContent = `Download all (${result.items.length})`;
-    bulkBtn.addEventListener("click", () => {
-      void queueDownloads(result.items);
-    });
-
-    bulkRow.append(bulkBtn);
-    group.append(bulkRow);
-  }
-
-  for (const item of result.items) {
-    group.append(createDownloadRow(item));
-  }
-
-  return group;
-}
-
-function createDownloadRow(item: DownloadItem): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "download-row";
-  const state = getDownloadState(item.id);
-
-  const label = document.createElement("span");
-  label.className = "download-row-label";
-  label.textContent = item.label;
-
-  const actions = document.createElement("div");
-  actions.className = "download-row-actions";
-
-  const statePill = document.createElement("span");
-  statePill.className = "state-pill";
-  statePill.dataset.phase = state.phase;
-  statePill.textContent = downloadPhaseLabel(state.phase);
-  actions.append(statePill);
-
-  const button = document.createElement("button");
-  button.className = "primary";
-  button.type = "button";
-  button.textContent = downloadButtonLabel(state.phase);
-  button.disabled = state.phase === "queued" || state.phase === "downloading";
-  button.addEventListener("click", () => {
-    void queueDownloads([item]);
-  });
-
-  actions.append(button);
-  row.append(label, actions);
-  return row;
-}
-
-function triggerDownload(item: DownloadItem, blob: Blob): void {
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.rel = "noreferrer";
-  anchor.download = item.filename;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => {
-    URL.revokeObjectURL(objectUrl);
-  }, 30_000);
-}
-
-function readOptions(): ResolveOptions {
-  return {
-    allowH265: allowH265.checked,
-    downloadMode: DEFAULT_RESOLVE_OPTIONS.downloadMode,
-    filenameStyle: DEFAULT_RESOLVE_OPTIONS.filenameStyle,
-    tiktokFullAudio: tiktokFullAudio.checked,
-    videoQuality: videoQuality.value as ResolveOptions["videoQuality"],
-  };
-}
-
-function applyOptions(options: ResolveOptions): void {
-  allowH265.checked = options.allowH265;
-  tiktokFullAudio.checked = options.tiktokFullAudio;
-  videoQuality.value = options.videoQuality;
-
-  // Sync switcher chip active state based on options
-  syncSwitcherChip(options);
-}
-
-function syncSwitcherChip(options: ResolveOptions): void {
-  // Determine which chip should be active (if options match a preset)
-  let activeOption: "quality" | "audio" | "speed" | null = null;
-
-  if (options.tiktokFullAudio) {
-    activeOption = "audio";
-  } else if (options.videoQuality === "max" && options.allowH265) {
-    activeOption = "quality";
-  } else if (!options.allowH265 && options.videoQuality === "720") {
-    activeOption = "speed";
-  }
-
-  for (const chip of switcherChips) {
-    chip.classList.toggle("active", activeOption !== null && chip.dataset.option === activeOption);
-  }
-}
-
-function persistDraft(): void {
-  const payload = {
-    options: readOptions(),
-    urls: urlInput.value,
-  };
-
-  localStorage.setItem(storageKey, JSON.stringify(payload));
-}
-
-function restoreDraft(): void {
-  applyOptions(DEFAULT_RESOLVE_OPTIONS);
-
-  const raw = localStorage.getItem(storageKey);
-  if (!raw) {
-    return;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as {
-      options?: Partial<ResolveOptions>;
-      urls?: string;
-    };
-    applyOptions({
-      ...DEFAULT_RESOLVE_OPTIONS,
-      ...parsed.options,
-    });
-    urlInput.value = parsed.urls ?? "";
-    updateOmniboxState();
-  } catch {
-    localStorage.removeItem(storageKey);
-  }
-}
-
-function hydrateSelect(select: HTMLSelectElement, values: readonly string[]): void {
-  for (const value of values) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value === "max" ? "max available" : `${value}p`;
-    select.append(option);
-  }
-}
-
-function setBusy(isBusy: boolean): void {
-  resolveButton.disabled = isBusy;
-  resolveButton.textContent = isBusy ? "Loading..." : "Download";
-}
-
-function updateBulkDownloadButton(results: ResolveResult[]): void {
-  const items = results.flatMap((result) => result.items);
-  const active = items.filter((item) => {
-    const phase = getDownloadState(item.id).phase;
-    return phase === "queued" || phase === "downloading";
-  }).length;
-
-  if (!items.length) {
-    downloadAllButton.hidden = true;
-    downloadAllButton.disabled = true;
-    downloadAllButton.textContent = "Download all";
-    return;
-  }
-
-  downloadAllButton.hidden = false;
-
-  if (active > 0) {
-    downloadAllButton.disabled = true;
-    downloadAllButton.textContent = "Downloading...";
-    return;
-  }
-
-  downloadAllButton.disabled = false;
-  downloadAllButton.textContent = `Download all (${items.length})`;
-}
-
-function getRequiredElement<TElement extends Element>(selector: string): TElement {
-  const element = document.querySelector<TElement>(selector);
-  if (!element) {
-    throw new Error(`Missing required element: ${selector}`);
-  }
-
-  return element;
-}
-
-async function queueDownloads(items: DownloadItem[]): Promise<void> {
-  const queue = items.filter((item) => {
-    const phase = getDownloadState(item.id).phase;
-    return phase !== "queued" && phase !== "downloading";
-  });
-
-  if (!queue.length) {
-    return;
-  }
-
-  for (const item of queue) {
-    setDownloadState(item.id, { phase: "queued" });
-  }
-  renderResults(currentResults);
-
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(downloadConcurrency, queue.length) }, async () => {
-    while (cursor < queue.length) {
-      const nextIndex = cursor;
-      cursor += 1;
-      await performDownload(queue[nextIndex]!);
-    }
-  });
-
-  await Promise.all(workers);
-}
-
-async function performDownload(item: DownloadItem): Promise<void> {
-  setDownloadState(item.id, { phase: "downloading" });
-  renderResults(currentResults);
-
-  try {
-    const response = await fetch(item.downloadPath);
-    if (!response.ok) {
-      throw new Error(await readDownloadError(response));
-    }
-
-    const blob = await response.blob();
-    triggerDownload(item, blob);
-    setDownloadState(item.id, { phase: "done" });
-  } catch (error) {
-    setDownloadState(item.id, {
-      message: error instanceof Error ? error.message : "Download failed.",
-      phase: "error",
-    });
-  }
-
-  renderResults(currentResults);
-}
-
-async function readDownloadError(response: Response): Promise<string> {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const body = (await response.json()) as { error?: string };
-    return body.error ?? `Download failed with status ${response.status}.`;
-  }
-
-  const text = await response.text();
-  return text || `Download failed with status ${response.status}.`;
-}
-
-function setDownloadState(id: string, state: DownloadState): void {
-  downloadStates.set(id, state);
-}
-
 function getDownloadState(id: string): DownloadState {
-  return downloadStates.get(id) ?? { phase: "idle" };
+  return state.downloadStates.get(id) ?? { phase: "idle" };
+}
+
+function setDownloadState(id: string, ds: DownloadState): void {
+  state.downloadStates.set(id, ds);
 }
 
 function downloadPhaseLabel(phase: DownloadPhase): string {
@@ -779,3 +117,553 @@ function downloadButtonLabel(phase: DownloadPhase): string {
       return "Download";
   }
 }
+
+function isChipActive(option: "quality" | "audio" | "speed", opts: ResolveOptions): boolean {
+  if (option === "audio" && opts.tiktokFullAudio) return true;
+  if (option === "quality" && opts.videoQuality === "max" && opts.allowH265) return true;
+  if (option === "speed" && !opts.allowH265 && opts.videoQuality === "720") return true;
+  return false;
+}
+
+// ─── Auto-grow textarea ─────────────────────────────────────────────────────
+
+function autoGrowTextarea(): void {
+  const el = urlInputRef.value;
+  if (!el) return;
+  el.style.height = "auto";
+  const lineHeight = parseInt(getComputedStyle(el).lineHeight, 10) || 22;
+  const maxRows = 8;
+  const maxHeight = lineHeight * maxRows;
+  const scrollHeight = el.scrollHeight;
+  el.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
+  el.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+// ─── Templates ──────────────────────────────────────────────────────────────
+
+function switcherChipTemplate(
+  option: "quality" | "audio" | "speed",
+  label: string,
+): ReturnType<typeof html> {
+  return html`
+    <button
+      class="switcher-chip ${classMap({ active: isChipActive(option, state.options) })}"
+      data-option=${option}
+      type="button"
+      @click=${() => handleChipClick(option)}
+    >
+      ${label}
+    </button>
+  `;
+}
+
+function downloadRowTemplate(item: DownloadItem): ReturnType<typeof html> {
+  const ds = getDownloadState(item.id);
+  const isBusy = ds.phase === "queued" || ds.phase === "downloading";
+
+  return html`
+    <div class="download-row">
+      <span class="download-row-label">${item.label}</span>
+      <div class="download-row-actions">
+        <span class="state-pill" data-phase=${ds.phase}>${downloadPhaseLabel(ds.phase)}</span>
+        <button
+          class="primary"
+          type="button"
+          ?disabled=${isBusy}
+          @click=${() => void queueDownloads([item])}
+        >
+          ${downloadButtonLabel(ds.phase)}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function resultGroupTemplate(result: ResolveResult): ReturnType<typeof html> {
+  return html`
+    <div class="result-group" data-state=${result.status}>
+      ${result.caption
+        ? html`
+            <div class="result-group-header">
+              <div class="result-group-title">${result.title}</div>
+              <button
+                class="ghost copy-caption-btn"
+                type="button"
+                @click=${(e: Event) => handleCopyCaption(e, result.caption!)}
+              >
+                Copy caption
+              </button>
+            </div>
+          `
+        : html`<div class="result-group-title">${result.title}</div>`}
+      ${result.message ? html`<p class="result-group-message">${result.message}</p>` : ""}
+      ${result.items.length > 1
+        ? html`
+            <div class="download-row">
+              <button class="ghost" type="button" @click=${() => void queueDownloads(result.items)}>
+                Download all (${result.items.length})
+              </button>
+            </div>
+          `
+        : ""}
+      ${map(result.items, (item) => downloadRowTemplate(item))}
+    </div>
+  `;
+}
+
+function resultsSummaryText(): string {
+  if (!state.results.length) return "";
+  const items = state.results.flatMap((r) => r.items);
+  const completed = items.filter((i) => getDownloadState(i.id).phase === "done").length;
+  const failed = items.filter((i) => getDownloadState(i.id).phase === "error").length;
+  const progressParts = [
+    completed ? `${completed} saved` : null,
+    failed ? `${failed} failed` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return `${items.length} ${items.length === 1 ? "video" : "videos"} found${progressParts ? ` — ${progressParts}` : ""}`;
+}
+
+function resultsAreaTemplate(): ReturnType<typeof html> {
+  const items = state.results.flatMap((r) => r.items);
+  const hasActive = items.some(
+    (i) =>
+      getDownloadState(i.id).phase === "queued" || getDownloadState(i.id).phase === "downloading",
+  );
+
+  return html`
+    <div class="results-area" id="results-area">
+      <div class="results-head">
+        <div class="results-summary" id="results-summary">${resultsSummaryText()}</div>
+        <button
+          class="ghost results-download-all"
+          id="download-all"
+          type="button"
+          ?hidden=${items.length === 0}
+          ?disabled=${hasActive}
+          @click=${() => void queueDownloads(state.results.flatMap((r) => r.items))}
+        >
+          ${hasActive ? "Downloading..." : `Download all (${items.length})`}
+        </button>
+      </div>
+      <div class="results-list" id="results">
+        ${map(state.results, (result) => resultGroupTemplate(result))}
+      </div>
+    </div>
+  `;
+}
+
+function footerTemplate(): ReturnType<typeof html> {
+  const baseText = "Paste links from Instagram or TikTok. No accounts needed.";
+  const isError = state.health && !state.health.ok;
+
+  return html`
+    <footer class="stage-footer">
+      <p style=${isError ? "color: var(--danger)" : ""}>
+        ${isError ? `${baseText} (Server unreachable)` : baseText}
+      </p>
+    </footer>
+  `;
+}
+
+function appTemplate(): ReturnType<typeof html> {
+  const linkCount = countLinks(state.urls);
+  const hasContent = state.urls.trim().length > 0;
+  const isExpanded = hasContent || linkCount > 1 || state.isInputFocused;
+
+  return html`
+    <main class="stage">
+      <!-- Utility nav -->
+      <nav class="utility-nav">
+        <a href="#how-it-works">How it works</a>
+        <a href="#settings">Settings</a>
+        <a href="#about">About</a>
+      </nav>
+
+      <!-- Cat mascot -->
+      <div class="mascot-wrap">
+        <div
+          class="cat-mascot"
+          id="cat-mascot"
+          data-state=${state.mascotState}
+          aria-hidden="true"
+          aria-label=${mascotMessages[state.mascotState]}
+        >
+          ${unsafeSVG(catSvg)}
+        </div>
+      </div>
+      <div class="mascot-message" aria-live="polite">${mascotMessages[state.mascotState]}</div>
+
+      <!-- Input stage -->
+      <div class="input-stage">
+        <form id="resolve-form" @submit=${handleSubmit}>
+          <div
+            class="omnibox ${classMap({ expanded: isExpanded, focused: state.isInputFocused })}"
+            id="omnibox"
+          >
+            <div class="omnibox-top">
+              <span class="omnibox-icon" aria-hidden="true">🔗</span>
+              <textarea
+                id="url-input"
+                placeholder="Paste links here..."
+                autocomplete="off"
+                aria-label="Video URLs"
+                rows="2"
+                .value=${live(state.urls)}
+                ${ref(urlInputRef)}
+                @input=${handleUrlInput}
+                @focus=${() => setState({ isInputFocused: true })}
+                @blur=${() => setState({ isInputFocused: false })}
+                @paste=${handlePaste}
+              ></textarea>
+              <button
+                class="omnibox-clear ${classMap({ visible: hasContent })}"
+                id="clear-input"
+                type="button"
+                aria-label="Clear"
+                @click=${handleClearInput}
+              >
+                ×
+              </button>
+            </div>
+            <div class="omnibox-bottom">
+              <span class="link-count" ?hidden=${linkCount <= 1}> ${linkCount} links </span>
+              <button
+                class="omnibox-submit"
+                id="resolve-button"
+                type="submit"
+                ?disabled=${state.isBusy}
+              >
+                ${state.isBusy ? "Loading..." : "Download"}
+              </button>
+            </div>
+          </div>
+
+          <!-- Hidden form controls -->
+          <select
+            id="video-quality"
+            name="videoQuality"
+            class="hidden"
+            .value=${state.options.videoQuality}
+          >
+            ${map(
+              VIDEO_QUALITIES,
+              (v) => html`<option value=${v}>${v === "max" ? "max available" : `${v}p`}</option>`,
+            )}
+          </select>
+          <input
+            id="allow-h265"
+            name="allowH265"
+            type="checkbox"
+            class="hidden"
+            ?checked=${state.options.allowH265}
+          />
+          <input
+            id="tiktok-full-audio"
+            name="tiktokFullAudio"
+            type="checkbox"
+            class="hidden"
+            ?checked=${state.options.tiktokFullAudio}
+          />
+        </form>
+      </div>
+
+      <!-- Switcher chips -->
+      <div class="switcher" role="group" aria-label="Download options">
+        ${switcherChipTemplate("quality", "Best quality")}
+        ${switcherChipTemplate("audio", "Original audio")}
+        ${switcherChipTemplate("speed", "Fast mode")}
+      </div>
+
+      <!-- Quick actions -->
+      <div class="quick-actions">
+        <button
+          class="paste-button"
+          id="paste-button"
+          type="button"
+          @click=${handlePasteFromClipboard}
+        >
+          Paste from clipboard
+        </button>
+      </div>
+
+      <!-- Inline results -->
+      ${resultsAreaTemplate()}
+    </main>
+
+    ${footerTemplate()}
+  `;
+}
+
+// ─── Event handlers ─────────────────────────────────────────────────────────
+
+function handleSubmit(event: Event): void {
+  event.preventDefault();
+  void resolveBatch();
+}
+
+function handleUrlInput(event: InputEvent): void {
+  const value = (event.target as HTMLTextAreaElement).value;
+  state.urls = value;
+  renderApp();
+  persistDraft();
+  autoGrowTextarea();
+}
+
+function handlePaste(): void {
+  setTimeout(() => {
+    const el = urlInputRef.value;
+    if (el) {
+      state.urls = el.value;
+      renderApp();
+      persistDraft();
+      autoGrowTextarea();
+    }
+  }, 0);
+}
+
+function handleClearInput(): void {
+  state.downloadStates.clear();
+  setState({
+    urls: "",
+    results: [],
+    mascotState: "waiting",
+  });
+  persistDraft();
+  setTimeout(() => urlInputRef.value?.focus(), 0);
+}
+
+async function handlePasteFromClipboard(): Promise<void> {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      setState({ urls: text });
+      persistDraft();
+      setTimeout(() => urlInputRef.value?.focus(), 0);
+    }
+  } catch {
+    urlInputRef.value?.focus();
+  }
+}
+
+function handleChipClick(option: "quality" | "audio" | "speed"): void {
+  const newOptions = { ...state.options };
+
+  if (option === "quality") {
+    newOptions.videoQuality = "max";
+    newOptions.allowH265 = true;
+    newOptions.tiktokFullAudio = false;
+  } else if (option === "audio") {
+    newOptions.videoQuality = DEFAULT_RESOLVE_OPTIONS.videoQuality;
+    newOptions.allowH265 = false;
+    newOptions.tiktokFullAudio = true;
+  } else if (option === "speed") {
+    newOptions.videoQuality = "720";
+    newOptions.allowH265 = false;
+    newOptions.tiktokFullAudio = false;
+  }
+
+  setState({ options: newOptions });
+  persistDraft();
+}
+
+async function handleCopyCaption(event: Event, caption: string): Promise<void> {
+  const button = event.target as HTMLButtonElement;
+  try {
+    await navigator.clipboard.writeText(caption);
+    button.textContent = "Copied!";
+    button.classList.add("copied");
+    setTimeout(() => {
+      button.textContent = "Copy caption";
+      button.classList.remove("copied");
+    }, 1500);
+  } catch {
+    button.textContent = "Failed";
+    setTimeout(() => {
+      button.textContent = "Copy caption";
+    }, 1500);
+  }
+}
+
+// ─── Core logic ─────────────────────────────────────────────────────────────
+
+async function resolveBatch(): Promise<void> {
+  const urls = parseUrlList(state.urls);
+  if (!urls.length) {
+    setState({ mascotState: "waiting", results: [] });
+    return;
+  }
+
+  setState({ isBusy: true, mascotState: "loading" });
+
+  try {
+    const payload = { options: state.options, urls };
+    const response = await fetch("/api/resolve", {
+      body: JSON.stringify(payload),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
+
+    const data = (await response.json()) as ResolveResponseBody | { error?: string };
+    if (!response.ok || !("results" in data)) {
+      throw new Error(
+        "error" in data && typeof data.error === "string"
+          ? data.error
+          : "Something went wrong. Please try again.",
+      );
+    }
+
+    state.downloadStates.clear();
+    setState({
+      results: data.results,
+      mascotState: "success",
+    });
+  } catch (error) {
+    state.downloadStates.clear();
+    setState({
+      results: [],
+      mascotState: "error",
+    });
+    // Re-render with error in summary
+    const summaryEl = document.querySelector<HTMLElement>("#results-summary");
+    if (summaryEl) {
+      summaryEl.textContent = error instanceof Error ? error.message : "Something went wrong.";
+    }
+  } finally {
+    setState({ isBusy: false });
+  }
+}
+
+async function refreshHealth(): Promise<void> {
+  try {
+    const response = await fetch("/api/health");
+    const health = (await response.json()) as HealthResponseBody;
+    setState({ health });
+  } catch (error) {
+    setState({
+      health: {
+        authenticated: false,
+        message: error instanceof Error ? error.message : "Unknown connectivity failure.",
+        ok: false,
+        services: [],
+        upstreamUrl: "Unavailable",
+      },
+    });
+  }
+}
+
+async function queueDownloads(items: DownloadItem[]): Promise<void> {
+  const queue = items.filter((item) => {
+    const phase = getDownloadState(item.id).phase;
+    return phase !== "queued" && phase !== "downloading";
+  });
+
+  if (!queue.length) return;
+
+  for (const item of queue) {
+    setDownloadState(item.id, { phase: "queued" });
+  }
+  renderApp();
+
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(downloadConcurrency, queue.length) }, async () => {
+    while (cursor < queue.length) {
+      const nextIndex = cursor;
+      cursor += 1;
+      await performDownload(queue[nextIndex]!);
+    }
+  });
+
+  await Promise.all(workers);
+}
+
+async function performDownload(item: DownloadItem): Promise<void> {
+  setDownloadState(item.id, { phase: "downloading" });
+  renderApp();
+
+  try {
+    const response = await fetch(item.downloadPath);
+    if (!response.ok) {
+      throw new Error(await readDownloadError(response));
+    }
+
+    const blob = await response.blob();
+    triggerDownload(item, blob);
+    setDownloadState(item.id, { phase: "done" });
+  } catch (error) {
+    setDownloadState(item.id, {
+      message: error instanceof Error ? error.message : "Download failed.",
+      phase: "error",
+    });
+  }
+
+  renderApp();
+}
+
+function triggerDownload(item: DownloadItem, blob: Blob): void {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.rel = "noreferrer";
+  anchor.download = item.filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+}
+
+async function readDownloadError(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? `Download failed with status ${response.status}.`;
+  }
+  const text = await response.text();
+  return text || `Download failed with status ${response.status}.`;
+}
+
+// ─── Persistence ────────────────────────────────────────────────────────────
+
+function persistDraft(): void {
+  localStorage.setItem(storageKey, JSON.stringify({ options: state.options, urls: state.urls }));
+}
+
+function restoreDraft(): void {
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) {
+    setState({ options: { ...DEFAULT_RESOLVE_OPTIONS }, urls: "" });
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { options?: Partial<ResolveOptions>; urls?: string };
+    setState({
+      options: { ...DEFAULT_RESOLVE_OPTIONS, ...parsed.options },
+      urls: parsed.urls ?? "",
+    });
+  } catch {
+    localStorage.removeItem(storageKey);
+  }
+}
+
+// ─── Render & Init ─────────────────────────────────────────────────────────
+
+function getOrThrowAppRoot(): HTMLDivElement {
+  const el = document.querySelector<HTMLDivElement>("#app");
+  if (!el) throw new Error("Missing app root.");
+  return el;
+}
+
+function renderApp(): void {
+  render(appTemplate(), getOrThrowAppRoot());
+  requestAnimationFrame(autoGrowTextarea);
+}
+
+function init(): void {
+  restoreDraft();
+  renderApp();
+  refreshHealth();
+}
+
+init();
