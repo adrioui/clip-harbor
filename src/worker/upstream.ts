@@ -1,4 +1,4 @@
-// Client for the configured Cobalt-compatible extraction upstream.
+// Client for the configured yt-dlp extraction upstream.
 // In normal deployments that upstream is Cobalt itself.
 // In free local mode, `scripts/local-origin-server.ts` provides a small bridge backed by yt-dlp.
 import type {
@@ -68,7 +68,7 @@ export async function fetchUpstreamInfo(env: Env): Promise<{
   services: string[];
   version?: string;
 }> {
-  const upstreamResponse = await fetch(new URL("/", env.COBALT_API_URL), {
+  const upstreamResponse = await fetch(new URL("/", env.EXTRACTOR_URL), {
     headers: buildUpstreamHeaders(env),
   });
 
@@ -97,12 +97,12 @@ export async function resolveSource(
   sourceUrl: string,
   options: ResolveOptions,
 ): Promise<ResolveResult> {
-  const timeoutMs = Number(env.COBALT_TIMEOUT_MS ?? "20000");
+  const timeoutMs = Number(env.EXTRACTOR_TIMEOUT_MS ?? "20000");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(new URL("/", env.COBALT_API_URL), {
+    const response = await fetch(new URL("/", env.EXTRACTOR_URL), {
       body: JSON.stringify({
         allowH265: options.allowH265,
         alwaysProxy: true,
@@ -184,7 +184,7 @@ export async function buildUpstreamDownloadRequestInit(
   remoteUrl: string,
 ): Promise<RequestInit> {
   const remote = new URL(remoteUrl);
-  const upstreamOrigin = new URL(env.COBALT_API_URL).origin;
+  const upstreamOrigin = new URL(env.EXTRACTOR_URL).origin;
 
   if (remote.origin === upstreamOrigin) {
     return {
@@ -199,19 +199,19 @@ export async function buildUpstreamDownloadRequestInit(
 }
 
 export function hasUpstreamAuth(env: Env): boolean {
-  return Boolean(env.COBALT_API_KEY || env.COBALT_BEARER_TOKEN);
+  return Boolean(env.EXTRACTOR_API_KEY || env.EXTRACTOR_BEARER_TOKEN);
 }
 
 function buildUpstreamHeaders(env: Env): HeadersInit {
-  if (env.COBALT_API_KEY) {
+  if (env.EXTRACTOR_API_KEY) {
     return {
-      Authorization: `Api-Key ${env.COBALT_API_KEY}`,
+      Authorization: `Api-Key ${env.EXTRACTOR_API_KEY}`,
     };
   }
 
-  if (env.COBALT_BEARER_TOKEN) {
+  if (env.EXTRACTOR_BEARER_TOKEN) {
     return {
-      Authorization: `Bearer ${env.COBALT_BEARER_TOKEN}`,
+      Authorization: `Bearer ${env.EXTRACTOR_BEARER_TOKEN}`,
     };
   }
 

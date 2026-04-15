@@ -9,34 +9,34 @@ import type { WorkerFetcher } from "../src/worker/runtime-types.ts";
 const realMode = process.argv.includes("--real");
 
 const baseEnv = {
-  COBALT_TIMEOUT_MS: "20000",
+  EXTRACTOR_TIMEOUT_MS: "20000",
   DOWNLOAD_TOKEN_SECRET: process.env.DOWNLOAD_TOKEN_SECRET ?? "dev-only-manual-smoke-secret",
   MAX_BATCH_SIZE: "25",
   MAX_UPSTREAM_CONCURRENCY: "3",
-} satisfies Omit<Env, "ASSETS" | "COBALT_API_URL" | "COBALT_API_KEY" | "COBALT_BEARER_TOKEN">;
+} satisfies Omit<Env, "ASSETS" | "EXTRACTOR_URL" | "EXTRACTOR_API_KEY" | "EXTRACTOR_BEARER_TOKEN">;
 
 const upstreamAuth = {
-  ...(process.env.COBALT_API_KEY ? { COBALT_API_KEY: process.env.COBALT_API_KEY } : {}),
-  ...(process.env.COBALT_BEARER_TOKEN
-    ? { COBALT_BEARER_TOKEN: process.env.COBALT_BEARER_TOKEN }
+  ...(process.env.EXTRACTOR_API_KEY ? { EXTRACTOR_API_KEY: process.env.EXTRACTOR_API_KEY } : {}),
+  ...(process.env.EXTRACTOR_BEARER_TOKEN
+    ? { EXTRACTOR_BEARER_TOKEN: process.env.EXTRACTOR_BEARER_TOKEN }
     : {}),
 };
 
 if (realMode) {
-  const cobaltUrl = process.env.COBALT_API_URL;
+  const extractorUrl = process.env.EXTRACTOR_URL;
   const tiktokUrl = process.env.SMOKE_TIKTOK_URL;
   const instagramUrl = process.env.SMOKE_INSTAGRAM_URL;
 
-  if (!cobaltUrl || !tiktokUrl || !instagramUrl) {
+  if (!extractorUrl || !tiktokUrl || !instagramUrl) {
     throw new Error(
-      "Real smoke mode requires COBALT_API_URL, SMOKE_TIKTOK_URL, and SMOKE_INSTAGRAM_URL.",
+      "Real smoke mode requires EXTRACTOR_URL, SMOKE_TIKTOK_URL, and SMOKE_INSTAGRAM_URL.",
     );
   }
 
   const env: Env = {
     ...baseEnv,
     ASSETS: createAssetFetcher(async () => new Response("ok")),
-    COBALT_API_URL: cobaltUrl,
+    EXTRACTOR_URL: extractorUrl,
     ...upstreamAuth,
   };
 
@@ -49,7 +49,7 @@ if (realMode) {
     const env: Env = {
       ...baseEnv,
       ASSETS: createAssetFetcher(async () => new Response("<!doctype html><title>mock</title>")),
-      COBALT_API_URL: server.url,
+      EXTRACTOR_URL: server.url,
       ...upstreamAuth,
     };
 

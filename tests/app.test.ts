@@ -9,7 +9,7 @@ function createEnv(): Env {
     ASSETS: createAssetFetcher(
       async () => new Response("<!doctype html><title>asset</title>", { status: 200 }),
     ),
-    COBALT_API_URL: "https://cobalt.example/",
+    EXTRACTOR_URL: "https://extractor.example/",
     DOWNLOAD_TOKEN_SECRET: "test-secret",
     MAX_BATCH_SIZE: "25",
     MAX_UPSTREAM_CONCURRENCY: "2",
@@ -20,7 +20,7 @@ test("health route reports upstream status", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input) => {
     const url = typeof input === "string" ? input : input.toString();
-    if (url === "https://cobalt.example/") {
+    if (url === "https://extractor.example/") {
       return new Response(
         JSON.stringify({
           cobalt: {
@@ -53,18 +53,18 @@ test("resolve route returns normalized results", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
     const url = typeof input === "string" ? input : input.toString();
-    if (url === "https://cobalt.example/" && init?.method === "POST") {
+    if (url === "https://extractor.example/" && init?.method === "POST") {
       return new Response(
         JSON.stringify({
           filename: "clip.mp4",
           status: "tunnel",
-          url: "https://cobalt.example/tunnel/clip.mp4",
+          url: "https://extractor.example/tunnel/clip.mp4",
         }),
         { status: 200 },
       );
     }
 
-    if (url === "https://cobalt.example/tunnel/clip.mp4") {
+    if (url === "https://extractor.example/tunnel/clip.mp4") {
       return new Response("bytes", { status: 200 });
     }
 

@@ -2,10 +2,10 @@ import type { WorkerFetcher } from "./runtime-types.ts";
 
 export interface Env {
   ASSETS: WorkerFetcher;
-  COBALT_API_KEY?: string;
-  COBALT_API_URL: string;
-  COBALT_BEARER_TOKEN?: string;
-  COBALT_TIMEOUT_MS?: string;
+  EXTRACTOR_API_KEY?: string;
+  EXTRACTOR_URL: string;
+  EXTRACTOR_BEARER_TOKEN?: string;
+  EXTRACTOR_TIMEOUT_MS?: string;
   DOWNLOAD_TOKEN_SECRET: string;
   MAX_BATCH_SIZE?: string;
   MAX_UPSTREAM_CONCURRENCY?: string;

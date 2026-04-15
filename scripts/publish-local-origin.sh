@@ -41,8 +41,8 @@ main() {
   api_key="$(tr -d '\n' <"${API_KEY_FILE}")"
   download_secret="$(tr -d '\n' <"${DOWNLOAD_SECRET_FILE}")"
 
-  put_secret "COBALT_API_URL" "${tunnel_url}"
-  put_secret "COBALT_API_KEY" "${api_key}"
+  put_secret "EXTRACTOR_URL" "${tunnel_url}"
+  put_secret "EXTRACTOR_API_KEY" "${api_key}"
   put_secret "DOWNLOAD_TOKEN_SECRET" "${download_secret}"
 
   log "deploying worker with local yt-dlp tunnel"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="${ROOT_DIR}/.runtime/local-origin"
-LOCAL_PORT="${COBALT_LOCAL_PORT:-9010}"
+LOCAL_PORT="${EXTRACTOR_LOCAL_PORT:-9010}"
 API_KEY_FILE="${STATE_DIR}/api-key.txt"
 TUNNEL_URL_FILE="${STATE_DIR}/tunnel-url.txt"
 STATE_FILE="${STATE_DIR}/state.json"

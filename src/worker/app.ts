@@ -15,7 +15,7 @@ import { buildContentDisposition, readDownloadToken } from "./token.ts";
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   try {
-    requireEnv(env.COBALT_API_URL, "COBALT_API_URL");
+    requireEnv(env.EXTRACTOR_URL, "EXTRACTOR_URL");
     requireEnv(env.DOWNLOAD_TOKEN_SECRET, "DOWNLOAD_TOKEN_SECRET");
   } catch (error) {
     return errorResponse(
@@ -60,7 +60,7 @@ async function handleHealth(env: Env): Promise<Response> {
       authenticated: info.authenticated,
       ok: true,
       services: info.services,
-      upstreamUrl: env.COBALT_API_URL,
+      upstreamUrl: env.EXTRACTOR_URL,
     };
     if (info.version) {
       body.version = info.version;
@@ -68,14 +68,14 @@ async function handleHealth(env: Env): Promise<Response> {
     return jsonResponse(body);
   } catch (error) {
     const body: HealthResponseBody = {
-      authenticated: Boolean(env.COBALT_API_KEY || env.COBALT_BEARER_TOKEN),
+      authenticated: Boolean(env.EXTRACTOR_API_KEY || env.EXTRACTOR_BEARER_TOKEN),
       message:
         error instanceof Error
           ? error.message
           : "Unable to connect to the configured extractor upstream.",
       ok: false,
       services: [],
-      upstreamUrl: env.COBALT_API_URL,
+      upstreamUrl: env.EXTRACTOR_URL,
     };
     return jsonResponse(body, 502);
   }

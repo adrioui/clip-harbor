@@ -12,6 +12,6 @@ not_found_handling = "single-page-application"
 enabled = true
 
 [vars]
-COBALT_TIMEOUT_MS = "20000"
+EXTRACTOR_TIMEOUT_MS = "20000"
 MAX_BATCH_SIZE = "25"
 MAX_UPSTREAM_CONCURRENCY = "3"
