@@ -32,6 +32,7 @@ export interface DownloadItem {
 }
 
 export interface ResolveResult {
+  caption?: string;
   items: DownloadItem[];
   message?: string;
   platform: SupportedPlatform | "unknown";

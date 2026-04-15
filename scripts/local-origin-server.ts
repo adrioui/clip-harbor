@@ -70,6 +70,7 @@ const server = createServer(async (request, response) => {
       cache.set(id, resolved);
 
       writeJson(response, 200, {
+        caption: resolved.description || undefined,
         filename: resolved.filename,
         status: "tunnel",
         url: `${publicUrl.replace(/\/+$/u, "")}/download?id=${encodeURIComponent(id)}`,
@@ -141,6 +142,7 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 interface CachedDownload {
+  description?: string;
   expiresAt: number;
   filename: string;
   sourceUrl: string;
@@ -152,6 +154,7 @@ interface YtDlpRequestedDownload {
 }
 
 interface YtDlpResult {
+  description?: string;
   id?: string;
   requested_downloads?: YtDlpRequestedDownload[];
 }
@@ -173,6 +176,7 @@ async function resolveSource(sourceUrl: string): Promise<CachedDownload> {
     expiresAt: Date.now() + ttlMs,
     filename: requested.filename ?? `${parsed.id ?? "download"}.mp4`,
     sourceUrl,
+    ...(parsed.description?.trim() ? { description: parsed.description.trim() } : {}),
   };
 }
 

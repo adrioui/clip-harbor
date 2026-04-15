@@ -16,6 +16,7 @@ interface UpstreamRedirectResponse {
   filename: string;
   status: "redirect" | "tunnel";
   url: string;
+  description?: string;
 }
 
 interface UpstreamPickerItem {
@@ -29,6 +30,7 @@ interface UpstreamPickerResponse {
   audioFilename?: string;
   picker: UpstreamPickerItem[];
   status: "picker";
+  description?: string;
 }
 
 interface UpstreamLocalProcessingResponse {
@@ -149,7 +151,14 @@ export async function resolveSource(
       ? humanizeFilename(items[0].filename)
       : sourceLabel(inferPlatform(sourceUrl));
 
+    const caption =
+      payload.status === "redirect" || payload.status === "tunnel" || payload.status === "picker"
+        ? (payload as UpstreamRedirectResponse | UpstreamPickerResponse).description?.trim() ||
+          undefined
+        : undefined;
+
     return {
+      ...(caption ? { caption } : {}),
       items,
       platform: inferPlatform(sourceUrl),
       sourceUrl,
