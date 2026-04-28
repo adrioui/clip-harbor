@@ -35,8 +35,14 @@ export async function readDownloadToken(
     return null;
   }
 
+  let actual: Uint8Array;
+  try {
+    actual = base64UrlDecode(signature);
+  } catch {
+    return null;
+  }
+
   const expected = await sign(secret, body);
-  const actual = base64UrlDecode(signature);
   if (!timingSafeEqual(expected, actual)) {
     return null;
   }

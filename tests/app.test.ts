@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { handleRequest } from "../src/worker/app.ts";
 import type { Env } from "../src/worker/env.ts";
 import type { WorkerFetcher } from "../src/worker/runtime-types.ts";
+import { issueDownloadToken } from "../src/worker/token.ts";
 
 function createEnv(): Env {
   return {
@@ -135,6 +136,225 @@ test("resolve route passes caption from extractor", async () => {
     };
     assert.equal(body.results[0]?.status, "ready");
     assert.equal(body.results[0]?.caption, "Check out this amazing video! #fun #viral");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download route rejects missing token", async () => {
+  const response = await handleRequest(
+    new Request("https://app.example/api/download"),
+    createEnv(),
+  );
+  assert.equal(response.status, 400);
+  const body = (await response.json()) as { error?: string };
+  assert.equal(body.error, "Missing download token.");
+});
+
+test("download route rejects invalid token", async () => {
+  const response = await handleRequest(
+    new Request("https://app.example/api/download?token=invalid.token.here"),
+    createEnv(),
+  );
+  assert.equal(response.status, 401);
+  const body = (await response.json()) as { error?: string };
+  assert.equal(body.error, "Invalid or tampered download token.");
+});
+
+test("download route rejects expired token", async () => {
+  const expiredToken = await issueDownloadToken("test-secret", {
+    expiresAt: Date.now() - 1000,
+    filename: "clip.mp4",
+    remoteUrl: "https://extractor.example/download/clip.mp4",
+  });
+
+  const response = await handleRequest(
+    new Request(`https://app.example/api/download?token=${encodeURIComponent(expiredToken)}`),
+    createEnv(),
+  );
+  assert.equal(response.status, 410);
+  const body = (await response.json()) as { error?: string };
+  assert.equal(body.error, "This download link has expired. Resolve the source again.");
+});
+
+test("download route rejects unsafe remote URLs", async () => {
+  const token = await issueDownloadToken("test-secret", {
+    expiresAt: Date.now() + 60_000,
+    filename: "clip.mp4",
+    remoteUrl: "http://evil.com/clip.mp4",
+  });
+
+  const response = await handleRequest(
+    new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+    createEnv(),
+  );
+  assert.equal(response.status, 400);
+  const body = (await response.json()) as { error?: string };
+  assert.equal(body.error, "Refusing to proxy an unsafe upstream URL.");
+});
+
+test("download route proxies upstream stream", async () => {
+  const originalFetch = globalThis.fetch;
+  const largeBody = new Uint8Array(2_000_000); // 2 MB
+  for (let offset = 0; offset < largeBody.length; offset += 65536) {
+    const chunk = largeBody.subarray(offset, offset + 65536);
+    crypto.getRandomValues(chunk);
+  }
+
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/download/clip.mp4") {
+      return new Response(largeBody, {
+        headers: {
+          "content-length": String(largeBody.length),
+          "content-type": "video/mp4",
+          "x-custom-header": "should-be-stripped",
+        },
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const token = await issueDownloadToken("test-secret", {
+      expiresAt: Date.now() + 60_000,
+      filename: "clip.mp4",
+      remoteUrl: "https://extractor.example/download/clip.mp4",
+    });
+
+    const response = await handleRequest(
+      new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+      createEnv(),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "video/mp4");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.ok(response.headers.get("content-disposition")?.includes("clip.mp4"));
+    assert.equal(response.headers.get("x-custom-header"), null);
+    assert.equal(response.headers.get("content-length"), null);
+
+    const received = new Uint8Array(await response.arrayBuffer());
+    assert.equal(received.length, largeBody.length);
+    assert.deepEqual(received, largeBody);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download route infers content-type from filename", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/download/audio.mp3") {
+      return new Response("audio-bytes", { status: 200 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const token = await issueDownloadToken("test-secret", {
+      expiresAt: Date.now() + 60_000,
+      filename: "audio.mp3",
+      remoteUrl: "https://extractor.example/download/audio.mp3",
+    });
+
+    const response = await handleRequest(
+      new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+      createEnv(),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "audio/mpeg");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download route surfaces upstream errors", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/download/broken.mp4") {
+      return new Response("upstream failure", { status: 503 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const token = await issueDownloadToken("test-secret", {
+      expiresAt: Date.now() + 60_000,
+      filename: "broken.mp4",
+      remoteUrl: "https://extractor.example/download/broken.mp4",
+    });
+
+    const response = await handleRequest(
+      new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+      createEnv(),
+    );
+
+    assert.equal(response.status, 503);
+    const body = (await response.json()) as { error?: string };
+    assert.equal(body.error, "upstream failure");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download route handles missing upstream body", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/download/empty.mp4") {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const token = await issueDownloadToken("test-secret", {
+      expiresAt: Date.now() + 60_000,
+      filename: "empty.mp4",
+      remoteUrl: "https://extractor.example/download/empty.mp4",
+    });
+
+    const response = await handleRequest(
+      new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+      createEnv(),
+    );
+
+    assert.equal(response.status, 502);
+    const body = (await response.json()) as { error?: string };
+    assert.equal(body.error, "Upstream download request failed.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("download route allows http localhost remote URLs", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "http://127.0.0.1:9010/download/clip.mp4") {
+      return new Response("local-bytes", { status: 200 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const token = await issueDownloadToken("test-secret", {
+      expiresAt: Date.now() + 60_000,
+      filename: "clip.mp4",
+      remoteUrl: "http://127.0.0.1:9010/download/clip.mp4",
+    });
+
+    const response = await handleRequest(
+      new Request(`https://app.example/api/download?token=${encodeURIComponent(token)}`),
+      createEnv(),
+    );
+
+    assert.equal(response.status, 200);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -156,22 +156,57 @@ async function handleDownload(request: Request, env: Env): Promise<Response> {
   );
 
   if (!upstream.ok || !upstream.body) {
-    const excerpt = await upstream.text();
+    const excerpt = upstream.body ? await upstream.text() : "";
     return errorResponse(
-      upstream.status || 502,
+      upstream.ok ? 502 : upstream.status,
       excerpt.slice(0, 200) || "Upstream download request failed.",
     );
   }
 
-  const headers = new Headers(upstream.headers);
-  headers.set("cache-control", "no-store");
-  headers.set("content-disposition", buildContentDisposition(sanitizeFilename(payload.filename)));
+  const headers = cleanDownloadHeaders(upstream.headers, payload.filename);
 
   return new Response(upstream.body, {
     headers,
     status: upstream.status,
     statusText: upstream.statusText,
   });
+}
+
+function cleanDownloadHeaders(upstreamHeaders: Headers, filename: string): Headers {
+  const headers = new Headers();
+
+  // Only forward safe, necessary headers. Strip hop-by-hop and size-related
+  // headers that can interfere with streaming or become stale after proxying.
+  const allowList = new Set(["last-modified", "etag"]);
+
+  for (const [name, value] of upstreamHeaders) {
+    if (allowList.has(name.toLowerCase())) {
+      headers.set(name, value);
+    }
+  }
+
+  // Always infer content-type from filename; ignore upstream content-type
+  // because runtimes may inject text/plain for string bodies.
+  headers.set("content-type", inferContentType(filename));
+
+  headers.set("cache-control", "no-store");
+  headers.set("content-disposition", buildContentDisposition(sanitizeFilename(filename)));
+
+  return headers;
+}
+
+function inferContentType(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".webm")) return "video/webm";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".ogg")) return "audio/ogg";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "application/octet-stream";
 }
 
 function safeRemoteUrl(input: string): string | null {
