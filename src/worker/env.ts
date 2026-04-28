@@ -7,6 +7,7 @@ export interface Env {
   EXTRACTOR_BEARER_TOKEN?: string;
   EXTRACTOR_VPC?: WorkerFetcher;
   EXTRACTOR_TIMEOUT_MS?: string;
+  ENABLE_DIRECT_CDN_DOWNLOADS?: string;
   DOWNLOAD_TOKEN_SECRET: string;
   MAX_BATCH_SIZE?: string;
   MAX_UPSTREAM_CONCURRENCY?: string;

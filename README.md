@@ -21,7 +21,7 @@ The Worker itself never runs `yt-dlp`.
 - The bridge extracts captions from yt-dlp's `description` field and returns them to the UI.
 - Repeated resolve requests are deduplicated in the Worker and served from a short-lived bridge source cache when possible, avoiding extra `yt-dlp` subprocesses on small hosts.
 - The bridge ties fallback downloads to client cancellation, kills timed-out `yt-dlp` process groups, disables transparent gzip decoding for media streams, ignores host-level yt-dlp config, caps metadata JSON size, and asks yt-dlp to skip comments/cache work.
-- When yt-dlp returns a safe direct HTTPS media URL, the Worker proxies that CDN URL directly so the VPS only performs extraction; downloads fall back through the bridge when private headers/cookies are required.
+- Downloads go through the extractor bridge by default so platform CDN requests come from the VPS instead of Cloudflare edge IPs, avoiding common 403 responses. Direct CDN proxying remains available only when `ENABLE_DIRECT_CDN_DOWNLOADS=true` is explicitly set.
 - Worker download failures only read a small error prefix and abort upstream fetches when clients disconnect, avoiding wasted memory and bandwidth.
 
 ## Stack
@@ -69,6 +69,7 @@ Optional values:
 - `EXTRACTOR_TIMEOUT_MS` (default: `90000`)
 - `MAX_BATCH_SIZE`
 - `MAX_UPSTREAM_CONCURRENCY` (default: `1` for tiny VPS stability)
+- `ENABLE_DIRECT_CDN_DOWNLOADS` (default: disabled; set `true`/`1` only if direct CDN downloads work from Cloudflare)
 
 `EXTRACTOR_URL` is the extractor bridge the Worker should call.
 

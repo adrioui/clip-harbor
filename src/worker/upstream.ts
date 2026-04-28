@@ -136,7 +136,11 @@ export async function resolveSource(env: Env, sourceUrl: string): Promise<Resolv
 // ── Download helpers ──
 
 function toDownloadUrl(env: Env, payload: ExtractorResolveResponse): string {
-  if (payload.directUrl && isSafeDirectUrl(payload.directUrl, payload.httpHeaders)) {
+  if (
+    isDirectCdnDownloadEnabled(env) &&
+    payload.directUrl &&
+    isSafeDirectUrl(payload.directUrl, payload.httpHeaders)
+  ) {
     return payload.directUrl;
   }
 
@@ -212,6 +216,10 @@ function sanitizeRemoteHeaders(
   }
 
   return Object.keys(sanitized).length ? sanitized : undefined;
+}
+
+function isDirectCdnDownloadEnabled(env: Env): boolean {
+  return env.ENABLE_DIRECT_CDN_DOWNLOADS === "1" || env.ENABLE_DIRECT_CDN_DOWNLOADS === "true";
 }
 
 function isSafeDirectUrl(url: string, headers: Record<string, string> | undefined): boolean {

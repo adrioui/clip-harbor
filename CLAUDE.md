@@ -12,7 +12,7 @@ The Worker validates inputs, asks an extractor for downloadable media URLs, sign
 - The Worker talks to the bridge via `EXTRACTOR_URL` using a clean yt-dlp-native API.
 - Worker extraction concurrency defaults to `1` for tiny VPS stability; raise `MAX_UPSTREAM_CONCURRENCY` only when the extractor host has headroom.
 - The Worker deduplicates repeated URLs in one resolve batch, and the Go bridge keeps a bounded short-lived source/in-flight cache to avoid repeated `yt-dlp` subprocesses for the same URL.
-- Safe direct HTTPS media URLs are proxied by the Worker directly; URLs requiring private headers/cookies fall back through the bridge.
+- Downloads go through the extractor bridge by default because some platform CDNs return 403 to Cloudflare edge IPs; direct CDN proxying is opt-in via `ENABLE_DIRECT_CDN_DOWNLOADS=true`.
 - Fallback bridge downloads respect client cancellation, kill timed-out `yt-dlp` process groups, request identity-encoded media streams, ignore host-level yt-dlp config, cap metadata JSON size, and skip avoidable yt-dlp comment/cache work.
 - The Go bridge supports `YTDLP_PATH`, `YTDLP_VERSION`, and `MAX_YTDLP_JSON_BYTES`; `YTDLP_VERSION` lets health checks avoid spawning `yt-dlp`.
 - `pnpm run local:publish` starts the bridge, opens a Quick Tunnel, updates Worker secrets, and deploys.

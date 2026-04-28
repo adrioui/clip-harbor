@@ -183,6 +183,133 @@ test("resolve route passes caption from extractor", async () => {
   }
 });
 
+test("resolve route prefers extractor download by default when direct CDN is available", async () => {
+  const originalFetch = globalThis.fetch;
+  let downloadedFromExtractor = false;
+  let downloadedFromCdn = false;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/extract" && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          directUrl: "https://cdn.example/clip.mp4",
+          filename: "clip.mp4",
+          httpHeaders: { "User-Agent": "yt-dlp-test-agent" },
+          type: "video",
+          url: "https://extractor.example/download?id=abc123",
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url === "https://extractor.example/download?id=abc123") {
+      downloadedFromExtractor = true;
+      return new Response("extractor-bytes", { status: 200 });
+    }
+
+    if (url === "https://cdn.example/clip.mp4") {
+      downloadedFromCdn = true;
+      return new Response("forbidden", { status: 403 });
+    }
+
+    throw new Error(`unexpected fetch ${url} ${init?.method ?? ""}`);
+  }) as typeof fetch;
+
+  try {
+    const resolve = await handleRequest(
+      new Request("https://app.example/api/resolve", {
+        body: JSON.stringify({ urls: ["https://www.tiktok.com/@demo/video/1234567890123456789"] }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+      createEnv(),
+    );
+
+    assert.equal(resolve.status, 200);
+    const body = (await resolve.json()) as {
+      results: Array<{ items: Array<{ downloadPath: string }>; status: string }>;
+    };
+    assert.equal(body.results[0]?.status, "ready");
+
+    const download = await handleRequest(
+      new Request(`https://app.example${body.results[0]?.items[0]?.downloadPath}`),
+      createEnv(),
+    );
+
+    assert.equal(download.status, 200);
+    assert.equal(await download.text(), "extractor-bytes");
+    assert.equal(downloadedFromExtractor, true);
+    assert.equal(downloadedFromCdn, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("resolve route can opt into direct CDN downloads", async () => {
+  const originalFetch = globalThis.fetch;
+  let seenAuthorization: string | null = null;
+  let seenUserAgent: string | null = null;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url === "https://extractor.example/extract" && init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          directUrl: "https://cdn.example/clip.mp4",
+          filename: "clip.mp4",
+          httpHeaders: { "User-Agent": "yt-dlp-test-agent" },
+          type: "video",
+          url: "https://extractor.example/download?id=abc123",
+        }),
+        { status: 200 },
+      );
+    }
+
+    if (url === "https://cdn.example/clip.mp4") {
+      const headers = new Headers(init?.headers);
+      seenAuthorization = headers.get("authorization");
+      seenUserAgent = headers.get("user-agent");
+      return new Response("cdn-bytes", { status: 200 });
+    }
+
+    throw new Error(`unexpected fetch ${url} ${init?.method ?? ""}`);
+  }) as typeof fetch;
+
+  try {
+    const env = {
+      ...createEnv(),
+      ENABLE_DIRECT_CDN_DOWNLOADS: "true",
+      EXTRACTOR_API_KEY: "private-key",
+    };
+    const resolve = await handleRequest(
+      new Request("https://app.example/api/resolve", {
+        body: JSON.stringify({ urls: ["https://www.tiktok.com/@demo/video/1234567890123456789"] }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+      env,
+    );
+
+    assert.equal(resolve.status, 200);
+    const body = (await resolve.json()) as {
+      results: Array<{ items: Array<{ downloadPath: string }>; status: string }>;
+    };
+
+    const download = await handleRequest(
+      new Request(`https://app.example${body.results[0]?.items[0]?.downloadPath}`),
+      env,
+    );
+
+    assert.equal(download.status, 200);
+    assert.equal(await download.text(), "cdn-bytes");
+    assert.equal(seenAuthorization, null);
+    assert.equal(seenUserAgent, "yt-dlp-test-agent");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("download route rejects missing token", async () => {
   const response = await handleRequest(
     new Request("https://app.example/api/download"),
