@@ -8,15 +8,20 @@ import { appTemplate } from "./templates/index.ts";
 import { autoGrowTextarea } from "./handlers/index.ts";
 import { subscribe } from "./state.ts";
 
-function getOrThrowAppRoot(): HTMLDivElement {
-  const el = document.querySelector<HTMLDivElement>("#app");
-  if (!el) throw new Error("Missing app root.");
-  return el;
-}
+const maybeAppRoot = document.querySelector<HTMLDivElement>("#app");
+if (!maybeAppRoot) throw new Error("Missing app root.");
+const appRoot = maybeAppRoot;
+
+let lastTextareaLayoutKey = "";
 
 export function renderApp(): void {
-  render(appTemplate(), getOrThrowAppRoot());
-  requestAnimationFrame(autoGrowTextarea);
+  const template = appTemplate();
+  render(template.result, appRoot);
+
+  if (template.textareaLayoutKey !== lastTextareaLayoutKey) {
+    lastTextareaLayoutKey = template.textareaLayoutKey;
+    requestAnimationFrame(autoGrowTextarea);
+  }
 }
 
 /** Initialize the render loop - subscribes to state changes */

@@ -28,13 +28,18 @@ export function getUrlInputRef(): MutableRef<HTMLTextAreaElement> {
 
 // ─── Auto-grow textarea ─────────────────────────────────────────────────────
 
+let cachedTextareaLineHeight = 0;
+
 export function autoGrowTextarea(): void {
   const el = urlInputRef.value;
   if (!el) return;
+
   el.style.height = "auto";
-  const lineHeight = parseInt(getComputedStyle(el).lineHeight, 10) || 22;
-  const maxRows = 8;
-  const maxHeight = lineHeight * maxRows;
+  if (!cachedTextareaLineHeight) {
+    cachedTextareaLineHeight = parseInt(getComputedStyle(el).lineHeight, 10) || 22;
+  }
+
+  const maxHeight = cachedTextareaLineHeight * 8;
   const scrollHeight = el.scrollHeight;
   el.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
   el.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";

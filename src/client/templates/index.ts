@@ -33,36 +33,50 @@ setUrlInputRef(urlInputRef);
 
 // ─── Main app template ──────────────────────────────────────────────────────
 
+let cachedUrls = "";
+let cachedLinkCount = 0;
+
+function countLinks(urls: string): number {
+  if (urls === cachedUrls) return cachedLinkCount;
+
+  cachedUrls = urls;
+  cachedLinkCount = parseUrlList(urls).length;
+  return cachedLinkCount;
+}
+
 export function appTemplate() {
   const state = getState();
-  const linkCount = parseUrlList(state.urls).length;
+  const linkCount = countLinks(state.urls);
   const hasContent = state.urls.trim().length > 0;
   const isExpanded = hasContent || linkCount > 1 || state.isInputFocused;
 
-  return html`
-    <main class="stage">
-      ${navTemplate()} ${mascotTemplate(state.mascotState)}
-      ${omniboxTemplate({
-        onRef: (el) => {
-          urlInputRef.value = el;
-        },
-        linkCount,
-        hasContent,
-        isExpanded,
-        isFocused: state.isInputFocused,
-        isBusy: state.isBusy,
-        urls: state.urls,
-        options: state.options,
-        onSubmit: handleSubmit,
-        onInput: handleUrlInput,
-        onFocus: handleFocus,
-        onBlur: handleBlur,
-        onPaste: handlePaste,
-        onClear: handleClearInput,
-      })}
-      ${switcherTemplate(state.options)} ${quickActionsTemplate()}
-      ${resultsAreaTemplate(state.results)}
-    </main>
-    ${footerTemplate(state.health)}
-  `;
+  return {
+    result: html`
+      <main class="stage">
+        ${navTemplate()} ${mascotTemplate(state.mascotState)}
+        ${omniboxTemplate({
+          onRef: (el) => {
+            urlInputRef.value = el;
+          },
+          linkCount,
+          hasContent,
+          isExpanded,
+          isFocused: state.isInputFocused,
+          isBusy: state.isBusy,
+          urls: state.urls,
+          options: state.options,
+          onSubmit: handleSubmit,
+          onInput: handleUrlInput,
+          onFocus: handleFocus,
+          onBlur: handleBlur,
+          onPaste: handlePaste,
+          onClear: handleClearInput,
+        })}
+        ${switcherTemplate(state.options)} ${quickActionsTemplate()}
+        ${resultsAreaTemplate(state.results)}
+      </main>
+      ${footerTemplate(state.health)}
+    `,
+    textareaLayoutKey: `${state.urls.length}:${linkCount}:${state.isInputFocused}`,
+  };
 }
