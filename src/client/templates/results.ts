@@ -17,25 +17,21 @@ import {
 
 function downloadPhaseLabel(phase: DownloadPhase): string {
   switch (phase) {
-    case "queued":
-      return "Waiting";
     case "downloading":
-      return "Downloading";
+      return "Fetching…";
     case "done":
-      return "Started";
+      return "Saved";
     case "error":
-      return "Retry";
+      return "Failed";
     default:
-      return "Ready";
+      return "";
   }
 }
 
 function downloadButtonLabel(phase: DownloadPhase): string {
   switch (phase) {
-    case "queued":
-      return "Waiting...";
     case "downloading":
-      return "Downloading...";
+      return "Fetching…";
     case "done":
       return "Download again";
     case "error":
@@ -61,7 +57,7 @@ function collectResultsStats(results: ResolveResult[]): ResultsStats {
       const phase = getDownloadState(item.id).phase;
       if (phase === "done") stats.completed += 1;
       else if (phase === "error") stats.failed += 1;
-      else if (phase === "queued" || phase === "downloading") stats.hasActive = true;
+      else if (phase === "downloading") stats.hasActive = true;
     }
   }
 
@@ -73,7 +69,7 @@ function resultsSummaryText(stats: ResultsStats): string {
   if (!items.length) return "";
 
   const progressParts = [
-    completed ? `${completed} started` : null,
+    completed ? `${completed} saved` : null,
     failed ? `${failed} failed` : null,
   ]
     .filter(Boolean)
@@ -85,7 +81,7 @@ function resultsSummaryText(stats: ResultsStats): string {
 
 function downloadRowTemplate(item: DownloadItem) {
   const ds = getDownloadState(item.id);
-  const isBusy = ds.phase === "queued" || ds.phase === "downloading";
+  const isBusy = ds.phase === "downloading";
 
   return html`
     <div class="download-row">
@@ -101,6 +97,7 @@ function downloadRowTemplate(item: DownloadItem) {
           ${downloadButtonLabel(ds.phase)}
         </button>
       </div>
+      ${ds.phase === "error" && ds.message ? html`<p class="download-error">${ds.message}</p>` : ""}
     </div>
   `;
 }
@@ -154,7 +151,7 @@ export function resultsAreaTemplate(results: ResolveResult[]) {
           ?disabled=${stats.hasActive}
           @click=${handleDownloadAllClick(stats.items)}
         >
-          ${stats.hasActive ? "Downloading..." : `Download all (${stats.items.length})`}
+          ${stats.hasActive ? "Fetching all…" : `Download all (${stats.items.length})`}
         </button>
       </div>
       <div class="results-list" id="results">

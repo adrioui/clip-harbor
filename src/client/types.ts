@@ -12,7 +12,7 @@ import type {
 
 // ─── Download state ─────────────────────────────────────────────────────────
 
-export type DownloadPhase = "idle" | "queued" | "downloading" | "done" | "error";
+export type DownloadPhase = "idle" | "downloading" | "done" | "error";
 export type MascotState = "idle" | "loading" | "success" | "error" | "waiting";
 
 export interface DownloadState {
