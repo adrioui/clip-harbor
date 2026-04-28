@@ -6,6 +6,7 @@ import { DEFAULT_RESOLVE_OPTIONS, type ResolveOptions } from "../shared/contract
 import { getState, setState } from "./state.ts";
 
 const storageKey = "unduh-unduh.draft";
+let persistTimer: number | undefined;
 
 interface DraftData {
   options?: Partial<ResolveOptions>;
@@ -13,6 +14,17 @@ interface DraftData {
 }
 
 export function persistDraft(): void {
+  if (persistTimer !== undefined) {
+    window.clearTimeout(persistTimer);
+  }
+
+  persistTimer = window.setTimeout(() => {
+    persistTimer = undefined;
+    writeDraft();
+  }, 150);
+}
+
+function writeDraft(): void {
   const { options, urls } = getState();
   localStorage.setItem(storageKey, JSON.stringify({ options, urls }));
 }
