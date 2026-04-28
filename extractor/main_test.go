@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func testEnv(key, val string) func() {
@@ -90,6 +91,41 @@ func TestPublicDirectURLSafety(t *testing.T) {
 	})
 	if len(clean) != 2 || clean["User-Agent"] != "agent" || clean["Referer"] == "" {
 		t.Fatalf("unexpected sanitized headers: %#v", clean)
+	}
+}
+
+func TestSetDirectRequestHeaders(t *testing.T) {
+	headers := http.Header{}
+	setDirectRequestHeaders(headers, map[string]string{
+		"Accept-Encoding":   "gzip",
+		"Connection":        "keep-alive",
+		"Referer":           "https://example.com/",
+		"User-Agent":        "custom-agent",
+		"X-Bad":             "line\nbreak",
+		"Transfer-Encoding": "chunked",
+	})
+
+	if got := headers.Get("Accept-Encoding"); got != "identity" {
+		t.Fatalf("Accept-Encoding = %q, want identity", got)
+	}
+	if got := headers.Get("User-Agent"); got != "custom-agent" {
+		t.Fatalf("User-Agent = %q, want custom-agent", got)
+	}
+	if got := headers.Get("Referer"); got != "https://example.com/" {
+		t.Fatalf("Referer = %q", got)
+	}
+	if headers.Get("Connection") != "" || headers.Get("Transfer-Encoding") != "" || headers.Get("X-Bad") != "" {
+		t.Fatalf("hop-by-hop or invalid headers were forwarded: %#v", headers)
+	}
+}
+
+func TestBuildYtDlpBaseArgsAvoidsExpensiveDefaults(t *testing.T) {
+	ytdlpTimeout = 30 * time.Second
+	args := strings.Join(buildYtDlpBaseArgs(), " ")
+	for _, want := range []string{"--no-playlist", "--no-warnings", "--no-write-comments", "--no-cache-dir"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("buildYtDlpBaseArgs missing %s in %q", want, args)
+		}
 	}
 }
 

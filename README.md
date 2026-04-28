@@ -20,6 +20,7 @@ The Worker itself never runs `yt-dlp`.
 - Download links are signed so the Worker does not become an open proxy.
 - The bridge extracts captions from yt-dlp's `description` field and returns them to the UI.
 - Repeated resolve requests are deduplicated in the Worker and served from a short-lived bridge source cache when possible, avoiding extra `yt-dlp` subprocesses on small hosts.
+- The bridge ties fallback downloads to client cancellation, kills timed-out `yt-dlp` process groups, disables transparent gzip decoding for media streams, and asks yt-dlp to skip comments/cache work.
 - When yt-dlp returns a safe direct HTTPS media URL, the Worker proxies that CDN URL directly so the VPS only performs extraction; downloads fall back through the bridge when private headers/cookies are required.
 
 ## Stack

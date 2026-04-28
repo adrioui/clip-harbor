@@ -210,9 +210,9 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	cacheMu.Unlock()
 
-	// Try direct download first, fallback to yt-dlp streaming
+	// Try direct download first, fallback to yt-dlp streaming.
 	if cached.DirectURL != "" {
-		if err := streamDirect(w, cached); err != nil {
+		if err := streamDirect(w, r, cached); err != nil {
 			log.Printf("[extractor] direct stream failed: %v, trying yt-dlp", err)
 			streamWithYtDlp(w, r, cached)
 		}
@@ -221,18 +221,15 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	streamWithYtDlp(w, r, cached)
 }
 
-func streamDirect(w http.ResponseWriter, cached *CachedDownload) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+func streamDirect(w http.ResponseWriter, r *http.Request, cached *CachedDownload) error {
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", cached.DirectURL, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", userAgent)
-	for k, v := range cached.HTTPHeaders {
-		req.Header.Set(k, v)
-	}
+	setDirectRequestHeaders(req.Header, cached.HTTPHeaders)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -279,7 +276,7 @@ func streamWithYtDlp(w http.ResponseWriter, r *http.Request, cached *CachedDownl
 		args = append(args, cached.SourceURL)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
 	defer cancel()
 
 	cmd := newYtDlpCommand(ctx, args...)
@@ -316,7 +313,7 @@ func streamWithYtDlp(w http.ResponseWriter, r *http.Request, cached *CachedDownl
 // ── yt-dlp helpers ──
 
 func buildYtDlpBaseArgs() []string {
-	args := []string{"--no-playlist", "--no-warnings", "--no-cache-dir", "--socket-timeout", strconv.Itoa(max(10, int(ytdlpTimeout.Seconds())))}
+	args := []string{"--no-playlist", "--no-warnings", "--no-write-comments", "--no-cache-dir", "--socket-timeout", strconv.Itoa(max(10, int(ytdlpTimeout.Seconds())))}
 	if ytdlpProxy != "" {
 		args = append(args, "--proxy", ytdlpProxy)
 	}
@@ -506,6 +503,7 @@ func newYtDlpCommand(ctx context.Context, args ...string) *exec.Cmd {
 		"XDG_CACHE_HOME=/tmp",
 		"PYTHONUNBUFFERED=1",
 	)
+	configureCommandCancellation(cmd)
 	return cmd
 }
 
@@ -516,6 +514,7 @@ var httpClient = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DisableCompression:    true,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          32,
 		MaxIdleConnsPerHost:   8,
@@ -535,6 +534,31 @@ var bufPool = sync.Pool{
 // ── Utility functions ──
 
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+func setDirectRequestHeaders(headers http.Header, upstreamHeaders map[string]string) {
+	for k, v := range upstreamHeaders {
+		if shouldSkipDirectRequestHeader(k, v) {
+			continue
+		}
+		headers.Set(k, v)
+	}
+	if headers.Get("User-Agent") == "" {
+		headers.Set("User-Agent", userAgent)
+	}
+	// Keep media streams byte-for-byte and avoid transparent gzip decode CPU/RAM.
+	headers.Set("Accept-Encoding", "identity")
+}
+
+func shouldSkipDirectRequestHeader(name, value string) bool {
+	if strings.ContainsAny(value, "\r\n") || len(value) > 2048 {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "accept-encoding", "connection", "content-length", "host", "keep-alive", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	}
+	return false
+}
 
 func isAuthorized(r *http.Request) bool {
 	auth := r.Header.Get("Authorization")
